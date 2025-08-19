@@ -1,16 +1,14 @@
 package GSQuad
   package Components
     model Quadrotor
-    
       // multi-fidelity quadrotor model
       // load packages
       import GSQuad.Constants;
       import GSQuad.Utils.quat2eul;
-      
+      import GSQuad.Utils.clip;
       // setup fidelity level and load different fidelity quadrotor model
       parameter Integer fidelity = 1;
       QuadLowFidelity quad_low if fidelity == 1;
-      
       // parameters
       // [sec] PWM signal frequency
       parameter Real pwm_interval = 0.005 if fidelity == 1;
@@ -19,7 +17,6 @@ package GSQuad
       // [-] minimum/maximum PWM
       parameter Real pwm_min = 1000;
       parameter Real pwm_max = 2000;
-      
       // input: four PWM inputs for rotors
       // channel 1: right-up (ccw, pwm: [1000 2000])
       // channel 2: right-down (cw, pwm: [1000 2000])
@@ -28,7 +25,6 @@ package GSQuad
       Connectors.ControlBus control annotation(
         Placement(transformation(origin = {-120, 5}, extent = {{-19.8, -12.375}, {19.8, 12.375}}), iconTransformation(origin = {-129.4, 1.125}, extent = {{-28.6, -17.875}, {28.6, 17.875}})));
       Connectors.RealInput pwm_rotor_cmd[4];
-      
       // output
       // [m] position: position of drone c.g. in world frame represented in world frame
       // [m/s] velocity: velocity of drone c.g. in world frame represented in body frame
@@ -38,15 +34,22 @@ package GSQuad
       // [rad] euler angle: attitude of drone body with respect to world frame (intrinsic rotation, 3-2-1)
       Connectors.SensorBus sensor annotation(
         Placement(transformation(origin = {120, 7}, extent = {{-19.8, -12.375}, {19.8, 12.375}}), iconTransformation(origin = {129.6, 1.75}, extent = {{-27.6, -17.25}, {27.6, 17.25}})));
-      Connectors.RealOutput pos_w_p_w_meas[3], vel_w_p_b_meas[3], quat_wb_meas[4], omega_wb_b_meas[3];
+      Connectors.RealOutput pos_w_p_w_meas[3](start = {0, 0, 0}, each fixed = true), vel_w_p_b_meas[3](start = {0, 0, 0}, each fixed = true);
+      Connectors.RealOutput quat_wb_meas[4](start = {1, 0, 0, 0}, each fixed = true), rate_wb_b_meas[3](start = {0, 0, 0}, each fixed = true);
       Connectors.RealOutput acc_w_p_b_meas[3], euler_wb_meas[3];
-      
       // internal states
       // [m/s^2, rad] acceleration of p(cg) in world frame(w) expressed in body frame(b), euler angle from world(w) to body(b)
       Real acc_w_p_b[3], euler_wb[3];
-      
-    equation
-    
+    algorithm
+// pwm sampling of ESC/servo
+      when sample(0, pwm_interval) then
+        if fidelity == 1 then
+          for idx in 1:4 loop
+            quad_low.omega_rotor_cmd[idx] := (quad_low.omega_rotor_max - quad_low.omega_rotor_min)*(clip(pwm_rotor_cmd[idx], pwm_min, pwm_max) - pwm_min)/(pwm_max - pwm_min) + quad_low.omega_rotor_min;
+          end for;
+        end if;
+      end when;
+      equation
       connect(control.pwm_1, pwm_rotor_cmd[1]);
       connect(control.pwm_2, pwm_rotor_cmd[2]);
       connect(control.pwm_3, pwm_rotor_cmd[3]);
@@ -67,61 +70,43 @@ package GSQuad
       connect(sensor.phi_wb, euler_wb_meas[1]);
       connect(sensor.theta_wb, euler_wb_meas[2]);
       connect(sensor.psi_wb, euler_wb_meas[3]);
-      connect(sensor.p_wb_b, omega_wb_b_meas[1]);
-      connect(sensor.q_wb_b, omega_wb_b_meas[2]);
-      connect(sensor.r_wb_b, omega_wb_b_meas[3]);
-      
-      // equation for sensor sampling
+      connect(sensor.p_wb_b, rate_wb_b_meas[1]);
+      connect(sensor.q_wb_b, rate_wb_b_meas[2]);
+      connect(sensor.r_wb_b, rate_wb_b_meas[3]);
+// equation for sensor sampling
       if fidelity == 1 then
         euler_wb = quat2eul(quad_low.quaternion_wb);
         acc_w_p_b = {0.0, 0.0, 0.0};
       end if;
-      
       when sample(0, sample_interval) then
         if fidelity == 1 then
           pos_w_p_w_meas = quad_low.position_w_p_w;
           vel_w_p_b_meas = quad_low.velocity_w_p_b;
           quat_wb_meas = quad_low.quaternion_wb;
-          omega_wb_b_meas = quad_low.omega_wb_b;
+          rate_wb_b_meas = quad_low.rate_wb_b;
           acc_w_p_b_meas = acc_w_p_b;
           euler_wb_meas[1] = euler_wb[1];
           euler_wb_meas[2] = euler_wb[2];
-          euler_wb_meas[3] = mod(euler_wb[3]+Constants.pi,2*Constants.pi)-Constants.pi;
+          euler_wb_meas[3] = mod(euler_wb[3] + Constants.pi, 2*Constants.pi) - Constants.pi;
         end if;
       end when;
-      
-    algorithm
-    
-      // pwm sampling of ESC/servo
-      when sample(0, pwm_interval) then
-        if fidelity == 1 then
-          for idx in 1:4 loop
-            quad_low.omega_rotor_cmd[idx] := (quad_low.omega_rotor_max-quad_low.omega_rotor_min)*(pwm_rotor_cmd[idx]-pwm_min)/(pwm_max-pwm_min)+ quad_low.omega_rotor_min;
-          end for;
-        end if;
-      end when;
-      
     annotation(
         Icon(graphics = {Ellipse(origin = {-70, 70}, extent = {{-30, 30}, {30, -30}}), Ellipse(origin = {70, 70}, extent = {{-30, 30}, {30, -30}}), Ellipse(origin = {-70, -70}, extent = {{-30, 30}, {30, -30}}), Ellipse(origin = {70, -70}, extent = {{-30, 30}, {30, -30}}), Polygon(points = {{-20, 40}, {-40, 20}, {-40, -20}, {-20, -40}, {20, -40}, {40, -20}, {40, 20}, {20, 40}, {0, 40}, {-20, 40}}), Ellipse(origin = {-70, 70}, fillPattern = FillPattern.Solid, extent = {{-2, 2}, {2, -2}}), Polygon(origin = {-48, 48}, points = {{-22, 22}, {14, -22}, {20, -16}, {22, -14}, {-22, 22}, {-22, 22}}), Polygon(origin = {48, 48}, points = {{22, 22}, {-14, -22}, {-22, -14}, {22, 22}, {22, 22}}), Ellipse(origin = {70, -70}, fillPattern = FillPattern.Solid, extent = {{-2, 2}, {2, -2}}), Ellipse(origin = {70, 70}, fillPattern = FillPattern.Solid, extent = {{-2, 2}, {2, -2}}), Polygon(origin = {48, -48}, points = {{22, -22}, {-14, 22}, {-22, 14}, {22, -22}, {22, -22}}), Ellipse(origin = {-70, -70}, fillPattern = FillPattern.Solid, extent = {{-2, 2}, {2, -2}}), Polygon(origin = {-48, -48}, points = {{-22, -22}, {22, 14}, {14, 22}, {-22, -22}, {-22, -22}}), Ellipse(origin = {70, 54}, extent = {{-2, -14}, {2, 14}}), Ellipse(origin = {70, 86}, extent = {{-2, -14}, {2, 14}}), Ellipse(origin = {-70, 86}, extent = {{-2, -14}, {2, 14}}), Ellipse(origin = {-70, 54}, extent = {{-2, -14}, {2, 14}}), Ellipse(origin = {-70, -54}, extent = {{-2, -14}, {2, 14}}), Ellipse(origin = {-70, -86}, extent = {{-2, -14}, {2, 14}}), Ellipse(origin = {70, -54}, extent = {{-2, -14}, {2, 14}}), Ellipse(origin = {70, -86}, extent = {{-2, -14}, {2, 14}}), Text(extent = {{-40, 18}, {40, -18}}, textString = "Quadrotor")}));
     end Quadrotor;
 
     model Controller
-    
       // multi-fidelity controller model
       // load packages
       import GSQuad.Constants;
-    
       // parameters
       // [sec] operational frequency
       parameter Real update_interval = 0.005;
       // [-] minimum/maximum PWM
       parameter Real pwm_min = 1000;
       parameter Real pwm_max = 2000;
-      
-      // setup controller type and load different controller
-      parameter Integer controller_type = 1;
-      EulerPID euler_pid;
-    
+      // setup controller type by chaning fidelity and load different controller
+      parameter Integer fidelity = 1;
+      EulerPID euler_pid if fidelity == 1;
       // input: sensor feedback from drone (refer to definitions in quadrotor model)
       Connectors.SensorBus sensor annotation(
         Placement(transformation(origin = {120.2, 6.375}, extent = {{-20.2, -12.625}, {20.2, 12.625}}), iconTransformation(origin = {-131, -61.125}, extent = {{-29, -18.125}, {29, 18.25}})));
@@ -134,14 +119,11 @@ package GSQuad
       Connectors.MAVLinkBus mavlink annotation(
         Placement(transformation(origin = {-120, -13}, extent = {{-19.8, -12.375}, {19.8, 12.375}}), iconTransformation(origin = {-128.4, -8.25}, extent = {{-27.6, -17.25}, {27.6, 17.25}})));
       Connectors.RealInput position_setpoint[3], yaw_setpoint;
-      
       // output, control singal (pwm)
       Connectors.ControlBus control annotation(
         Placement(transformation(origin = {-120.2, -61.625}, extent = {{-20.2, -12.625}, {20.2, 12.625}}), iconTransformation(origin = {131, 2.875}, extent = {{-29, -18.125}, {29, 18.125}})));
       Connectors.RealOutput pwm_rotor_cmd[4];
-    
     equation
-    
       connect(sensor.x_w_p_w, pos_w_p_w_fdbk[1]);
       connect(sensor.y_w_p_w, pos_w_p_w_fdbk[2]);
       connect(sensor.z_w_p_w, pos_w_p_w_fdbk[3]);
@@ -173,17 +155,14 @@ package GSQuad
       connect(control.pwm_2, pwm_rotor_cmd[2]);
       connect(control.pwm_3, pwm_rotor_cmd[3]);
       connect(control.pwm_4, pwm_rotor_cmd[4]);
-    
       when sample(0, update_interval) then
-        pwm_rotor_cmd[1] = pwm_min+(pwm_max-pwm_min)*euler_pid.normalized_ctrl_input_1;
-        pwm_rotor_cmd[2] = pwm_min+(pwm_max-pwm_min)*euler_pid.normalized_ctrl_input_2;
-        pwm_rotor_cmd[3] = pwm_min+(pwm_max-pwm_min)*euler_pid.normalized_ctrl_input_3;
-        pwm_rotor_cmd[4] = pwm_min+(pwm_max-pwm_min)*euler_pid.normalized_ctrl_input_4;
+        pwm_rotor_cmd[1] = pwm_min + (pwm_max - pwm_min)*euler_pid.normalized_ctrl_input_1;
+        pwm_rotor_cmd[2] = pwm_min + (pwm_max - pwm_min)*euler_pid.normalized_ctrl_input_2;
+        pwm_rotor_cmd[3] = pwm_min + (pwm_max - pwm_min)*euler_pid.normalized_ctrl_input_3;
+        pwm_rotor_cmd[4] = pwm_min + (pwm_max - pwm_min)*euler_pid.normalized_ctrl_input_4;
       end when;
-    
     algorithm
-    
-      // algorithm models pwm sampling of ESC/servo
+// algorithm models pwm sampling of ESC/servo
       when sample(0, update_interval) then
         euler_pid.position_setpoint := position_setpoint;
         euler_pid.yaw_setpoint := yaw_setpoint;
@@ -191,34 +170,31 @@ package GSQuad
         euler_pid.vel_w_p_b_fdbk := vel_w_p_b_fdbk;
         euler_pid.euler_wb_fdbk := euler_wb_fdbk;
         euler_pid.omega_wb_b_fdbk := omega_wb_b_fdbk;
-    
-    
       end when;
-    
-    annotation(
+      annotation(
         Diagram,
         Icon(graphics = {Rectangle(origin = {0, -14}, fillPattern = FillPattern.Solid, extent = {{-20, 30}, {20, -30}}), Rectangle(origin = {25, 11}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {25, -5}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {25, 3}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {25, -13}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {25, -21}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {-25, 11}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {-25, 3}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {-25, -5}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {-25, -13}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {-25, -21}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(lineThickness = 0.75, extent = {{-60, 80}, {60, -80}}), Rectangle(origin = {28, -59}, lineThickness = 1.25, extent = {{-20, 5}, {20, -5}}), Rectangle(origin = {-44, 61}, lineThickness = 0.5, extent = {{-10, 5}, {10, -5}}), Rectangle(origin = {28, -59}, fillPattern = FillPattern.Solid, extent = {{-10, 1}, {10, -1}}), Rectangle(origin = {-28, -59}, lineThickness = 1.25, extent = {{-20, 5}, {20, -5}}), Rectangle(origin = {-28, -59}, fillPattern = FillPattern.Solid, extent = {{-10, 1}, {10, -1}}), Rectangle(origin = {-44, 58}, lineThickness = 0.5, extent = {{-6, 2}, {6, -2}}), Rectangle(origin = {-52, 57}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {-36, 57}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {-51, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-47, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-41, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-37, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-44, 45}, lineThickness = 0.5, extent = {{-10, 5}, {10, -5}}), Rectangle(origin = {-44, 42}, lineThickness = 0.5, extent = {{-6, 2}, {6, -2}}), Rectangle(origin = {-52, 41}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {-36, 41}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {-51, 47}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-47, 47}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-41, 47}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-37, 47}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {16, 61}, lineThickness = 0.5, extent = {{-10, 5}, {10, -5}}), Rectangle(origin = {16, 58}, lineThickness = 0.5, extent = {{-6, 2}, {6, -2}}), Rectangle(origin = {8, 57}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {24, 57}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {9, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {13, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {19, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {23, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-16, 61}, lineThickness = 0.5, extent = {{-10, 5}, {10, -5}}), Rectangle(origin = {-16, 58}, lineThickness = 0.5, extent = {{-6, 2}, {6, -2}}), Rectangle(origin = {-24, 57}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {-8, 57}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {-23, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-19, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-13, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-9, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {44, 45}, lineThickness = 0.5, extent = {{-10, 5}, {10, -5}}), Rectangle(origin = {44, 42}, lineThickness = 0.5, extent = {{-6, 2}, {6, -2}}), Rectangle(origin = {36, 41}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {52, 41}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {37, 47}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {41, 47}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {47, 47}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {51, 47}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {44, 61}, lineThickness = 0.5, extent = {{-10, 5}, {10, -5}}), Rectangle(origin = {44, 58}, lineThickness = 0.5, extent = {{-6, 2}, {6, -2}}), Rectangle(origin = {36, 57}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {52, 57}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {37, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {41, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {47, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {51, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-13, 44}, lineThickness = 0.5, extent = {{-7, 4}, {7, -4}}), Rectangle(origin = {-17, 45}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-9, 45}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-13, 45}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {13, 44}, lineThickness = 0.5, extent = {{-7, 4}, {7, -4}}), Rectangle(origin = {9, 45}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {17, 45}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {13, 45}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Ellipse(origin = {-55, 75}, lineThickness = 0.5, extent = {{-3, 3}, {3, -3}}), Line(origin = {-55, 75}, points = {{-1, 1}, {1, -1}, {1, -1}}), Rectangle(origin = {-25, 29}, lineThickness = 0.5, extent = {{-15, 5}, {15, -5}}), Rectangle(origin = {-25, 26}, lineThickness = 0.5, extent = {{-11, 2}, {11, -2}}), Rectangle(origin = {-37, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-33, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-29, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-25, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-21, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-17, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-13, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {25, 29}, lineThickness = 0.5, extent = {{-15, 5}, {15, -5}}), Rectangle(origin = {25, 26}, lineThickness = 0.5, extent = {{-11, 2}, {11, -2}}), Rectangle(origin = {13, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {17, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {21, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {25, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {29, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {33, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {37, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Line(origin = {-55, 75}, points = {{1, 1}, {-1, -1}, {-1, -1}}), Ellipse(origin = {-55, 75}, lineThickness = 0.5, extent = {{-3, 3}, {3, -3}}), Line(origin = {-55, 75}, points = {{-1, 1}, {1, -1}, {1, -1}}), Line(origin = {-55, 75}, points = {{1, 1}, {-1, -1}, {-1, -1}}), Ellipse(origin = {55, 75}, lineThickness = 0.5, extent = {{-3, 3}, {3, -3}}), Line(origin = {55, 75}, points = {{-1, 1}, {1, -1}, {1, -1}}), Line(origin = {55, 75}, points = {{1, 1}, {-1, -1}, {-1, -1}}), Ellipse(origin = {55, 75}, lineThickness = 0.5, extent = {{-3, 3}, {3, -3}}), Line(origin = {55, 75}, points = {{-1, 1}, {1, -1}, {1, -1}}), Line(origin = {55, 75}, points = {{1, 1}, {-1, -1}, {-1, -1}}), Ellipse(origin = {-55, -75}, lineThickness = 0.5, extent = {{-3, 3}, {3, -3}}), Line(origin = {-55, -75}, points = {{-1, 1}, {1, -1}, {1, -1}}), Line(origin = {-55, -75}, points = {{1, 1}, {-1, -1}, {-1, -1}}), Ellipse(origin = {-55, -75}, lineThickness = 0.5, extent = {{-3, 3}, {3, -3}}), Line(origin = {-55, -75}, points = {{-1, 1}, {1, -1}, {1, -1}}), Line(origin = {-55, -75}, points = {{1, 1}, {-1, -1}, {-1, -1}}), Ellipse(origin = {55, -75}, lineThickness = 0.5, extent = {{-3, 3}, {3, -3}}), Line(origin = {55, -75}, points = {{-1, 1}, {1, -1}, {1, -1}}), Line(origin = {55, -75}, points = {{1, 1}, {-1, -1}, {-1, -1}}), Ellipse(origin = {55, -75}, lineThickness = 0.5, extent = {{-3, 3}, {3, -3}}), Line(origin = {55, -75}, points = {{-1, 1}, {1, -1}, {1, -1}}), Line(origin = {55, -75}, points = {{1, 1}, {-1, -1}, {-1, -1}}), Rectangle(origin = {-25, -29}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {-25, -37}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {25, -29}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {25, -37}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Text(origin = {0, -90}, extent = {{-60, 10}, {60, -10}}, textString = "Controller")}));
     end Controller;
 
     model QuadLowFidelity
-    
       // note: low-fidelity quadrotor model, considering quadrotor dynamics only (w/o aerodynamics, motor, sensor dynamics)
       // load packages
       import GSQuad.Constants;
       import GSQuad.Utils.clip;
       import GSQuad.Utils.quat2rot;
       import GSQuad.Utils.hatmap;
-      import Modelica.Math.Matrices.inv;
-      
+      import GSQuad.Utils.quatprod;
+      import GSQuad.Utils.cross3;
+      import GSQuad.Utils.inv3x3;
       // parameters
       // [kg] mass of quadrotor
-      parameter Real mass = 0.942+4*0.15+1.072+4*0.037;
+      parameter Real mass = 0.942 + 4*0.15 + 1.072 + 4*0.037;
       // [kg*m^2] x moment of inertia (computed by hand using parallel axis theorem 0.0233)
-      parameter Real Ixx = (1/12*(0.942+1.072)*(0.11^2+0.11^2))+4*(1/12*0.15*0.328^2*sin(45/180*Constants.pi)^2+0.15*(0.164^2*sin(45/180*Constants.pi)^2+0.025^2))+4*(1/12*0.037*(0.01^2+3*0.02^2)+0.037*(0.328^2*sin(45/180*Constants.pi)^2+0.025^2));
+      parameter Real Ixx = (1/12*(0.942 + 1.072)*(0.11^2 + 0.11^2)) + 4*(1/12*0.15*0.328^2*sin(45/180*Constants.pi)^2 + 0.15*(0.164^2*sin(45/180*Constants.pi)^2 + 0.025^2)) + 4*(1/12*0.037*(0.01^2 + 3*0.02^2) + 0.037*(0.328^2*sin(45/180*Constants.pi)^2 + 0.025^2));
       // [kg*m^2] y moment of inertia (computed by hand using parallel axis theorem 0.0344)
-      parameter Real Iyy = (1/12*(0.942+1.072)*(0.11^2+0.28^2))+4*(1/12*0.15*0.328^2*sin(45/180*Constants.pi)^2+0.15*(0.164^2*sin(45/180*Constants.pi)^2+0.025^2))+4*(1/12*0.037*(0.01^2+3*0.02^2)+0.037*(0.328^2*sin(45/180*Constants.pi)^2+0.025^2));
+      parameter Real Iyy = (1/12*(0.942 + 1.072)*(0.11^2 + 0.28^2)) + 4*(1/12*0.15*0.328^2*sin(45/180*Constants.pi)^2 + 0.15*(0.164^2*sin(45/180*Constants.pi)^2 + 0.025^2)) + 4*(1/12*0.037*(0.01^2 + 3*0.02^2) + 0.037*(0.328^2*sin(45/180*Constants.pi)^2 + 0.025^2));
       // [kg*m^2] z moment of inertia (computed by hand using parallel axis theorem 0.0527)
-      parameter Real Izz = (1/12*(0.942+1.072)*(0.11^2+0.28^2))+4*(1/3*0.15*0.328^2)+4*(1/2*0.037*0.02^2+0.037*0.328^2);
+      parameter Real Izz = (1/12*(0.942 + 1.072)*(0.11^2 + 0.28^2)) + 4*(1/3*0.15*0.328^2) + 4*(1/2*0.037*0.02^2 + 0.037*0.328^2);
       // [kg*m^2] xy product inertia
       parameter Real Ixy = 0.0;
       // [kg*m^2] yz product inertia
@@ -227,10 +203,13 @@ package GSQuad
       parameter Real Ixz = 0.0;
       // [kg*m^2] rotor inertia
       parameter Real Ir = 0.0;
+      // get inertia matrix and its inversion
+      parameter Real J[3,3] = [Ixx, Ixy, Ixz; Ixy, Iyy, Iyz; Ixz, Iyz, Izz];
+      parameter Real Jinv[3,3] = inv3x3([Ixx, Ixy, Ixz; Ixy, Iyy, Iyz; Ixz, Iyz, Izz]);
       // [m] arm length from cg to each rotor
       parameter Real d_arm = 0.328;
       // [m] rotor position w.r.t cg
-      parameter Real rotor_pos[3,4] = d_arm*[cos(45/180*Constants.pi), cos(135/180*Constants.pi), cos(225/180*Constants.pi), cos(315/180*Constants.pi); sin(45/180*Constants.pi), sin(135/180*Constants.pi), sin(225/180*Constants.pi), sin(315/180*Constants.pi); 0.0, 0.0, 0.0, 0.0];
+      parameter Real rotor_pos[3, 4] = d_arm*[cos(45/180*Constants.pi), cos(135/180*Constants.pi), cos(225/180*Constants.pi), cos(315/180*Constants.pi); sin(45/180*Constants.pi), sin(135/180*Constants.pi), sin(225/180*Constants.pi), sin(315/180*Constants.pi); 0.0, 0.0, 0.0, 0.0];
       // [-] rotating direction of rotors (+1: CCW, -1: CW, CCW rotation = CW torque = +Z yaw moment)
       parameter Integer rotor_dir[4] = {1, -1, 1, -1};
       // [N/(rad/s)^2] thrust coefficient
@@ -243,90 +222,70 @@ package GSQuad
       parameter Real omega_rotor_min = 0;
       // [-] feedback correction term for quaternion (numerical constraints as lagrange multiplier)
       parameter Real quat_fdbk_correction = 0.1;
-      
-      
       // inputs
       // [rad/s] rotational speed command from ESC
       discrete Real omega_rotor_cmd[4];
-    
       // states
       // [m] position of p(cg) in world frame(w) expressed in world frame(w) = ned position from origin
-      Real position_w_p_w[3](start = {0, 0, 0}, each fixed = false);
+      Real position_w_p_w[3](start = {0, 0, 0}, each fixed = true);
       // [m/s] velocity of p(cg) in world frame(w) expressed in body frame(b) = body velocity
-      Real velocity_w_p_b[3](start = {0, 0, 0}, each fixed = false);
-      // [-] attitude of body frame(b) relative to world frame(w) = attitude w.r.t ned
-      Real quaternion_wb[4](start = {1, 0, 0, 0}, each fixed = false);
+      Real velocity_w_p_b[3](start = {0, 0, 0}, each fixed = true);
+      // [-] attitude of body frame(b) relative to world frame(w) = attitude w.r.t ned (intrinsic)
+      Real quaternion_wb[4](start = {1, 0, 0, 0}, each fixed = true);
       // [rad/s] rate of body frame(b) relative to world frame(w) expressed in body frame(b) = p,q,r
-      Real omega_wb_b[3](start = {0, 0, 0}, each fixed = false);
+      Real rate_wb_b[3](start = {0, 0, 0}, each fixed = true);
       // [rad/s] rotational speed of rotors
-      Real omega_motor[4](start = {0, 0, 0, 0}, each fixed = false);
-      
+      Real omega_motor[4](start = {0, 0, 0, 0}, each fixed = true);
       // internal states
       // [N, N*m] force/moment in body coordinates
       Real F_b[3], M_b[3];
-      // [-] inertia, rotation, quaternion kinematic matrix
-      Real J[3,3], C_wb[3,3], Omega[4,4];
-      
+      // [-] rotation matrix
+      Real C_wb[3, 3];
     equation
-      // compute body forces and moments
+// compute body forces and moments
       for idx in 1:4 loop
-        omega_motor[idx] = clip(omega_rotor_cmd[idx], omega_rotor_min, omega_rotor_max);
+        omega_motor[idx] = clip(pre(omega_rotor_cmd[idx]), omega_rotor_min, omega_rotor_max);
       end for;
-      F_b = sum({0, 0, -k_eta*omega_motor[idx]^2} for idx in 1:4);
-      M_b = sum(cross(rotor_pos[:,idx], {0, 0, -k_eta*omega_motor[idx]^2})+(rotor_dir[idx]*{0, 0, k_m*omega_motor[idx]^2}) for idx in 1:4);
-      
-      // compute coordinate transformation matrix from w to b
+      F_b = {0.0, 0.0, -k_eta*sum(omega_motor[idx]^2 for idx in 1:4)};
+      M_b = sum(cross(rotor_pos[:, idx], {0, 0, -k_eta*omega_motor[idx]^2}) + (rotor_dir[idx]*{0, 0, k_m*omega_motor[idx]^2}) for idx in 1:4);
+// compute coordinate transformation matrix from w to b
       C_wb = transpose(quat2rot(quaternion_wb));
-      
-      // get inertia matrix
-      J = [Ixx, Ixy, Ixz; Ixy, Iyy, Iyz; Ixz, Iyz, Izz];
-      
-      // compute quaternion kinematic matrix
-      Omega = [0.0, -omega_wb_b[1], -omega_wb_b[2], -omega_wb_b[3]; omega_wb_b[1], 0.0, omega_wb_b[3], -omega_wb_b[2]; omega_wb_b[2], -omega_wb_b[3], 0.0, omega_wb_b[1]; omega_wb_b[3], omega_wb_b[2], -omega_wb_b[1], 0.0];
-      
-      // compute the derivative
+    
+// compute the derivative
       der(position_w_p_w) = transpose(C_wb)*velocity_w_p_b;
-      der(velocity_w_p_b) = -cross(omega_wb_b, velocity_w_p_b)+1/mass*F_b+C_wb*{0, 0, Constants.g};
-      der(quaternion_wb) = 0.5*Omega*quaternion_wb;// + quat_fdbk_correction*(1-sum(quaternion_wb.*quaternion_wb))*quaternion_wb;
-      der(omega_wb_b) = inv(J)*(-hatmap({omega_wb_b[1], omega_wb_b[2], omega_wb_b[3]})*(J*{omega_wb_b[1], omega_wb_b[2], omega_wb_b[3]})+M_b);
-      
+      der(velocity_w_p_b) = -cross3(rate_wb_b, velocity_w_p_b) + F_b./mass + C_wb*{0, 0, Constants.g};
+      der(quaternion_wb) = 0.5*quatprod({0.0, rate_wb_b[1], rate_wb_b[2], rate_wb_b[3]}, quaternion_wb) + quat_fdbk_correction*(1 - sum(quaternion_wb.*quaternion_wb))*quaternion_wb;
+      der(rate_wb_b) = Jinv*(-hatmap({rate_wb_b[1], rate_wb_b[2], rate_wb_b[3]})*(J*{rate_wb_b[1], rate_wb_b[2], rate_wb_b[3]}) + M_b);
+      annotation(
+        Icon(graphics = {Rectangle(origin = {0, 60}, fillColor = {200, 200, 200}, fillPattern = FillPattern.Solid, extent = {{-20, -20}, {20, 20}}), Line(origin = {0, 60}, points = {{0, 0}, {60, 0}}, color = {0, 0, 255}, thickness = 2, arrow = {Arrow.None, Arrow.Filled}), Text(origin = {21, 62}, extent = {{44, -3}, {64, 8}}, textString = "Velocity"), Text(origin = {53, 58}, extent = {{-114, -6}, {-78, 17}}, textString = "No Drag Force"), Rectangle(fillColor = {230, 230, 230}, fillPattern = FillPattern.Solid, extent = {{-20, -20}, {20, 20}}), Text(origin = {0, -24},extent = {{-20, 5}, {20, 15}}, textString = "Motor"), Line(origin = {18.0957, -0.670213},points = {{-80, 0}, {-40, 0}}, color = {0, 0, 255}, thickness = 2, arrow = {Arrow.None, Arrow.Filled}), Text(origin = {30, 6},extent = {{-110, -5}, {-80, 15}}, textString = "ω_cmd"), Line(points = {{0, -20}, {0, -60}}, color = {0, 128, 0}, thickness = 2, arrow = {Arrow.None, Arrow.Filled}), Text(origin = {1, -14}, extent = {{4, -41}, {26, -26}}, textString = "$\\omega$"), Line(origin = {-16, 0},points = {{40, 0}, {80, 0}}, color = {255, 0, 0}, thickness = 2, arrow = {Arrow.None, Arrow.Filled}), Text(origin = {-26, 6},extent = {{85, -5}, {120, 15}}, textString = "Thrust T"), Text(extent = {{-50, -80}, {50, -65}}, textString = "dω/dt = (ω_cmd - ω)/τ,  T = k_t·ω²"), Text(origin = {0, 36},extent = {{-20, 5}, {20, 15}}, textString = "Chassis")}));
     end QuadLowFidelity;
 
     model Joystick
-    
       // parameters
       // [sec] output command update rate
       parameter Real sample_interval = 0.01;
-    
       // output: normalized rc signal (roll/pitch/yaw [-1, +1], throttle [0, 1])
       Connectors.RealOutput stick_cmd[4];
       Connectors.RCBus rc annotation(
         Placement(transformation(origin = {120.2, 6.375}, extent = {{-20.2, -12.625}, {20.2, 12.625}}), iconTransformation(origin = {129, -17.125}, extent = {{-29, -18.125}, {29, 18.25}})));
-    
     equation
-    
       connect(rc.roll, stick_cmd[1]);
       connect(rc.pitch, stick_cmd[2]);
       connect(rc.yaw, stick_cmd[3]);
       connect(rc.throttle, stick_cmd[4]);
-      
     algorithm
-    
       when sample(0, sample_interval) then
-        // default mode: zero commands from joystick
+// default mode: zero commands from joystick
         stick_cmd := {0.0, 0.0, 0.0, 0.0};
       end when;
-
-    annotation(
+      annotation(
         Icon(graphics = {Rectangle(extent = {{-80, 60}, {80, -60}}), Ellipse(origin = {-39, 25}, extent = {{-25, 25}, {25, -25}}), Ellipse(origin = {39, 25}, extent = {{-25, 25}, {25, -25}}), Rectangle(origin = {0, -30}, extent = {{-60, 20}, {60, -20}}), Text(origin = {0, -30}, extent = {{-40, 10}, {40, -10}}, textString = "Joystick"), Rectangle(origin = {0, 76}, extent = {{-4, 16}, {4, -16}}), Ellipse(origin = {-39, 25}, extent = {{-3, 3}, {3, -3}}), Rectangle(origin = {-39, 25}, extent = {{-19, 11}, {19, -11}}), Rectangle(origin = {39, 25}, extent = {{-19, 11}, {19, -11}}), Ellipse(origin = {39, 19}, extent = {{-3, 3}, {3, -3}})}));
     end Joystick;
 
     model MissionPlanner
-    
       // parameters
       // [sec] output command update rate
       parameter Real sample_interval = 0.1;
-    
       // output: mavlink signal (simplified: currently support only waypoints)
       // [m] waypoint cooridnate defined in world frame (w), NED coordinates
       Connectors.RealOutput position_setpoint_w[3];
@@ -334,199 +293,179 @@ package GSQuad
       Connectors.RealOutput yaw_setpoint_w;
       Connectors.MAVLinkBus mavlink annotation(
         Placement(transformation(origin = {120.2, 6.375}, extent = {{-20.2, -12.625}, {20.2, 12.625}}), iconTransformation(origin = {129, -17.125}, extent = {{-29, -18.125}, {29, 18.25}})));
-    
     equation
-    
       connect(mavlink.x_w, position_setpoint_w[1]);
       connect(mavlink.y_w, position_setpoint_w[2]);
       connect(mavlink.z_w, position_setpoint_w[3]);
       connect(mavlink.yaw_w, yaw_setpoint_w);
-    
     algorithm
-    
       when sample(0, sample_interval) then
-        // default waypoint in NED coordinate
+// default waypoint in NED coordinate
         position_setpoint_w := {0.0, 0.0, 0.0};
         yaw_setpoint_w := 0.0;
       end when;
-    
-annotation(
+      annotation(
         Icon(graphics = {Rectangle(origin = {0, 35}, extent = {{-60, 35}, {60, -35}}), Polygon(origin = {0, -26}, points = {{-60, 26}, {-80, -26}, {80, -26}, {60, 26}, {-60, 26}}), Rectangle(origin = {0, 35}, extent = {{-56, 31}, {56, -31}}), Text(origin = {0, 36}, extent = {{-56, 18}, {56, -18}}, textString = "Mission Planner"), Polygon(origin = {0, -25}, points = {{-58, 23}, {-76, -23}, {76, -23}, {58, 23}, {-58, 23}, {-58, 23}}), Polygon(origin = {4, -13}, points = {{-60, 9}, {-68, -11}, {60, -11}, {52, 9}, {52, 9}, {-60, 9}}), Polygon(origin = {-32, -37}, points = {{12, 9}, {10, -7}, {54, -7}, {52, 9}, {52, 9}, {12, 9}})}));
-end MissionPlanner;
+    end MissionPlanner;
 
-model EulerPID
+    model EulerPID
+      // note: Euler angle-based PID controller model, position tracking
+      // load packages
+      import GSQuad.Constants;
+      import GSQuad.Utils.clip;
+      import GSQuad.Utils.quat2rot;
+      import GSQuad.Utils.eul2rot;
+      import GSQuad.Utils.hatmap;
+      import Modelica.Math.sin;
+      import Modelica.Math.cos;
+      import Modelica.Math.atan;
+      import Modelica.Math.acos;
+      import Modelica.Math.Matrices.inv;
+      // parameters
+      // [rad/s] rotor maximum rotational speed
+      parameter Real omega_rotor_max = 1500;
+      // [rad/s] rotor minimum rotational speed
+      parameter Real omega_rotor_min = 0;
+      // [sec] operational frequency
+      parameter Real update_interval = 0.005;
+      // [-] gains
+      parameter Real Kp_x = 0.20;
+      parameter Real Kp_y = 0.20;
+      parameter Real Kp_z = 0.40;
+      parameter Real Kp_vx = 0.25;
+      parameter Real Ki_vx = 0.00;
+      parameter Real Kd_vx = 0.00;
+      parameter Real Kp_vy = 0.25;
+      parameter Real Ki_vy = 0.00;
+      parameter Real Kd_vy = 0.00;
+      parameter Real Kp_vz = 0.30;
+      parameter Real Ki_vz = 0.00;
+      parameter Real Kd_vz = 0.00;
+      parameter Real Kp_phi = 1.00;
+      parameter Real Kp_the = 1.00;
+      parameter Real Kp_psi = 0.80;
+      parameter Real Kp_p = 1.60;
+      parameter Real Ki_p = 0.00;
+      parameter Real Kd_p = 0.60;
+      parameter Real Kp_q = 1.60;
+      parameter Real Ki_q = 0.00;
+      parameter Real Kd_q = 0.60;
+      parameter Real Kp_r = 2.00;
+      parameter Real Ki_r = 0.00;
+      parameter Real Kd_r = 0.80;
+      // input
+      discrete Real pos_w_p_w_fdbk[3], vel_w_p_b_fdbk[3], euler_wb_fdbk[3], omega_wb_b_fdbk[3];
+      discrete Real position_setpoint[3], yaw_setpoint;
+      // output
+      // [-] rotational speed command from ESC
+      //discrete Real normalized_ctrl_input[4](start={0,0,0,0}, each fixed=true);
+      discrete Real normalized_ctrl_input_1(start = 0, fixed = true);
+      discrete Real normalized_ctrl_input_2(start = 0, fixed = true);
+      discrete Real normalized_ctrl_input_3(start = 0, fixed = true);
+      discrete Real normalized_ctrl_input_4(start = 0, fixed = true);
+      // states
+      // [m] position error
+      discrete Real pos_error[3];
+      // [m/s] velocity target
+      discrete Real vel_target[3];
+      // [m/s] velocity error
+      discrete Real vel_error[3];
+      // compute coordinate transformation matrix from w to b
+      discrete Real C_wb[3, 3](start = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}, each fixed = false);
+      // [m] velocity error integral
+      discrete Real vel_error_i[3];
+      // [m/s] previous iteration velocity error
+      discrete Real vel_error_last[3];
+      // [m/s^2] velocity error derivative
+      discrete Real vel_error_d[3];
+      // [m/s^2] acceleration target
+      discrete Real acc_target[3];
+      discrete Real acc_z_target, acc_fwd_target, acc_rgt_target;
+      // [rad] attitude target
+      discrete Real roll_target, pitch_target, yaw_target;
+      // [rad] attitude_error
+      discrete Real att_error[3];
+      // [rad/s] rate target
+      discrete Real omega_target[3];
+      // [rad/s] rate error
+      discrete Real omega_error[3];
+      // [rad] angular rate error integral
+      discrete Real omega_error_i[3];
+      // [rad/s] previous iteration rate error
+      discrete Real omega_error_last[3];
+      // [rad/s^2] angular rate error derivative
+      discrete Real omega_error_d[3];
+      // [N, N*m] force/moment target in body coordinates
+      discrete Real force_target, moment_target[3];
+      discrete Real fm_target[4];
+      // [-] current body thrust vector direction (-Z direction of inertial coordinates represented in body coordinates)
+      discrete Real att_body_thrust_vec[3];
+      // [-] lean angle between inertial/body negative z-axis
+      discrete Real lean_angle;
+      // [-] required thrust of each rotor
+      discrete Real thrust_target[4];
+      discrete Real ang_spd_target[4];
+      //discrete Real check1, check2;//, check3;
+      // parameters
+      // [kg] mass of quadrotor
+      parameter Real mass = 0.942 + 4*0.15 + 1.072 + 4*0.037;
+      // [kg*m^2] x moment of inertia (computed by hand using parallel axis theorem 0.0233)
+      parameter Real Ixx = (1/12*(0.942 + 1.072)*(0.11^2 + 0.11^2)) + 4*(1/12*0.15*0.328^2*sin(45/180*Constants.pi)^2 + 0.15*(0.164^2*sin(45/180*Constants.pi)^2 + 0.025^2)) + 4*(1/12*0.037*(0.01^2 + 3*0.02^2) + 0.037*(0.328^2*sin(45/180*Constants.pi)^2 + 0.025^2));
+      // [kg*m^2] y moment of inertia (computed by hand using parallel axis theorem 0.0344)
+      parameter Real Iyy = (1/12*(0.942 + 1.072)*(0.11^2 + 0.28^2)) + 4*(1/12*0.15*0.328^2*sin(45/180*Constants.pi)^2 + 0.15*(0.164^2*sin(45/180*Constants.pi)^2 + 0.025^2)) + 4*(1/12*0.037*(0.01^2 + 3*0.02^2) + 0.037*(0.328^2*sin(45/180*Constants.pi)^2 + 0.025^2));
+      // [kg*m^2] z moment of inertia (computed by hand using parallel axis theorem 0.0527)
+      parameter Real Izz = (1/12*(0.942 + 1.072)*(0.11^2 + 0.28^2)) + 4*(1/3*0.15*0.328^2) + 4*(1/2*0.037*0.02^2 + 0.037*0.328^2);
+      // [kg*m^2] xy product inertia
+      parameter Real Ixy = 0.0;
+      // [kg*m^2] yz product inertia
+      parameter Real Iyz = 0.0;
+      // [kg*m^2] xz product inertia
+      parameter Real Ixz = 0.0;
+      // [kg*m^2] inertia
+      parameter Real J[3, 3] = [Ixx, Ixy, Ixz; Ixy, Iyy, Iyz; Ixz, Iyz, Izz];
+      // [N/(N,N*m)] control effectiveness pseudo-inverse
+      //parameter Real M[4,4] = [1, 1, 1, 1; 0.328*cos(45/180*Constants.pi), 0.328*cos(135/180*Constants.pi), 0.328*cos(225/180*Constants.pi), 0.328*cos(315/180*Constants.pi); 0.328*sin(45/180*Constants.pi), 0.328*sin(135/180*Constants.pi), 0.328*sin(225/180*Constants.pi), 0.328*sin(315/180*Constants.pi); 0.136e-6/5.570e-6, -0.136e-6/5.570e-6, 0.136e-6/5.570e-6, -0.136e-6/5.570e-6];
+      //[1, 1, 1, 1; d_arm*cos(45/180*Constants.pi), d_arm*cos(135/180*Constants.pi), d_arm*cos(225/180*Constants.pi), d_arm*cos(315/180*Constants.pi); d_arm*sin(45/180*Constants.pi), d_arm*sin(135/180*Constants.pi), d_arm*sin(225/180*Constants.pi), d_arm*sin(315/180*Constants.pi); k_m/k_eta, -k_m/k_eta, k_m/k_eta, -k_m/k_eta]
+      parameter Real pinv_CA[4, 4] = {{0.2500, 1.0779, 1.0779, 10.2390}, {0.2500, -1.0779, 1.0779, -10.2390}, {0.2500, -1.0779, -1.0779, 10.2390}, {0.2500, 1.0779, -1.0779, -10.2390}};
+      // [N/(rad/s)^2] thrust coefficient
+      parameter Real k_eta = 1.7*5.570e-6;
+    equation
 
-  // note: Euler angle-based PID controller model, position tracking
-  // load packages
-  import GSQuad.Constants;
-  import GSQuad.Utils.clip;
-  import GSQuad.Utils.quat2rot;
-  import GSQuad.Utils.eul2rot;
-  import GSQuad.Utils.hatmap;
-  import Modelica.Math.sin;
-  import Modelica.Math.cos;
-  import Modelica.Math.atan;
-  import Modelica.Math.acos;
-  import Modelica.Math.Matrices.inv;
-  
-  // parameters
-  // [rad/s] rotor maximum rotational speed
-  parameter Real omega_rotor_max = 1500;
-  // [rad/s] rotor minimum rotational speed
-  parameter Real omega_rotor_min = 0;
-  // [sec] operational frequency
-  parameter Real update_interval = 0.005;
-  
-  // [-] gains
-  parameter Real Kp_x = 0.20;
-  parameter Real Kp_y = 0.20;
-  parameter Real Kp_z = 0.40;
-  parameter Real Kp_vx = 0.25;
-  parameter Real Ki_vx = 0.00;
-  parameter Real Kd_vx = 0.00;
-  parameter Real Kp_vy = 0.25;
-  parameter Real Ki_vy = 0.00;
-  parameter Real Kd_vy = 0.00;
-  parameter Real Kp_vz = 0.30;
-  parameter Real Ki_vz = 0.00;
-  parameter Real Kd_vz = 0.00;
-  parameter Real Kp_phi = 1.00;
-  parameter Real Kp_the = 1.00;
-  parameter Real Kp_psi = 0.80;
-  parameter Real Kp_p = 1.60;
-  parameter Real Ki_p = 0.00;
-  parameter Real Kd_p = 0.60;
-  parameter Real Kp_q = 1.60;
-  parameter Real Ki_q = 0.00;
-  parameter Real Kd_q = 0.60;
-  parameter Real Kp_r = 2.00;
-  parameter Real Ki_r = 0.00;
-  parameter Real Kd_r = 0.80;
-  
-  // input
-  discrete Real pos_w_p_w_fdbk[3], vel_w_p_b_fdbk[3], euler_wb_fdbk[3], omega_wb_b_fdbk[3];
-  discrete Real position_setpoint[3], yaw_setpoint;
-  
-  // output
-  // [-] rotational speed command from ESC
-  //discrete Real normalized_ctrl_input[4](start={0,0,0,0}, each fixed=true);
-  discrete Real normalized_ctrl_input_1(start=0, fixed=true);
-  discrete Real normalized_ctrl_input_2(start=0, fixed=true);
-  discrete Real normalized_ctrl_input_3(start=0, fixed=true);
-  discrete Real normalized_ctrl_input_4(start=0, fixed=true);
-  
-  // states
-  // [m] position error
-  discrete Real pos_error[3];
-  // [m/s] velocity target
-  discrete Real vel_target[3];
-  // [m/s] velocity error
-  discrete Real vel_error[3];
-  // compute coordinate transformation matrix from w to b
-  discrete Real C_wb[3,3](start={{1, 0, 0},{0, 1, 0},{0, 0, 1}},each fixed=false);
-  // [m] velocity error integral
-  discrete Real vel_error_i[3];
-  // [m/s] previous iteration velocity error
-  discrete Real vel_error_last[3];
-  // [m/s^2] velocity error derivative
-  discrete Real vel_error_d[3];
-  // [m/s^2] acceleration target
-  discrete Real acc_target[3];
-  discrete Real acc_z_target, acc_fwd_target, acc_rgt_target;
-  // [rad] attitude target
-  discrete Real roll_target, pitch_target, yaw_target;
-  // [rad] attitude_error
-  discrete Real att_error[3];
-  // [rad/s] rate target
-  discrete Real omega_target[3];
-  // [rad/s] rate error
-  discrete Real omega_error[3];
-  // [rad] angular rate error integral
-  discrete Real omega_error_i[3];
-  // [rad/s] previous iteration rate error
-  discrete Real omega_error_last[3];
-  // [rad/s^2] angular rate error derivative
-  discrete Real omega_error_d[3];
-  // [N, N*m] force/moment target in body coordinates
-  discrete Real force_target, moment_target[3];
-  discrete Real fm_target[4];
-  // [-] current body thrust vector direction (-Z direction of inertial coordinates represented in body coordinates)
-  discrete Real att_body_thrust_vec[3];
-  // [-] lean angle between inertial/body negative z-axis
-  discrete Real lean_angle;
-  // [-] required thrust of each rotor
-  discrete Real thrust_target[4];
-  discrete Real ang_spd_target[4];
-  //discrete Real check1, check2;//, check3;
-  // parameters
-  // [kg] mass of quadrotor
-  parameter Real mass = 0.942+4*0.15+1.072+4*0.037;
-  // [kg*m^2] x moment of inertia (computed by hand using parallel axis theorem 0.0233)
-  parameter Real Ixx = (1/12*(0.942+1.072)*(0.11^2+0.11^2))+4*(1/12*0.15*0.328^2*sin(45/180*Constants.pi)^2+0.15*(0.164^2*sin(45/180*Constants.pi)^2+0.025^2))+4*(1/12*0.037*(0.01^2+3*0.02^2)+0.037*(0.328^2*sin(45/180*Constants.pi)^2+0.025^2));
-  // [kg*m^2] y moment of inertia (computed by hand using parallel axis theorem 0.0344)
-  parameter Real Iyy = (1/12*(0.942+1.072)*(0.11^2+0.28^2))+4*(1/12*0.15*0.328^2*sin(45/180*Constants.pi)^2+0.15*(0.164^2*sin(45/180*Constants.pi)^2+0.025^2))+4*(1/12*0.037*(0.01^2+3*0.02^2)+0.037*(0.328^2*sin(45/180*Constants.pi)^2+0.025^2));
-  // [kg*m^2] z moment of inertia (computed by hand using parallel axis theorem 0.0527)
-  parameter Real Izz = (1/12*(0.942+1.072)*(0.11^2+0.28^2))+4*(1/3*0.15*0.328^2)+4*(1/2*0.037*0.02^2+0.037*0.328^2);
-  // [kg*m^2] xy product inertia
-  parameter Real Ixy = 0.0;
-  // [kg*m^2] yz product inertia
-  parameter Real Iyz = 0.0;
-  // [kg*m^2] xz product inertia
-  parameter Real Ixz = 0.0;
-  // [kg*m^2] inertia
-  parameter Real J[3,3] = [Ixx, Ixy, Ixz; Ixy, Iyy, Iyz; Ixz, Iyz, Izz];
-  // [N/(N,N*m)] control effectiveness pseudo-inverse
-  //parameter Real M[4,4] = [1, 1, 1, 1; 0.328*cos(45/180*Constants.pi), 0.328*cos(135/180*Constants.pi), 0.328*cos(225/180*Constants.pi), 0.328*cos(315/180*Constants.pi); 0.328*sin(45/180*Constants.pi), 0.328*sin(135/180*Constants.pi), 0.328*sin(225/180*Constants.pi), 0.328*sin(315/180*Constants.pi); 0.136e-6/5.570e-6, -0.136e-6/5.570e-6, 0.136e-6/5.570e-6, -0.136e-6/5.570e-6];
-  //[1, 1, 1, 1; d_arm*cos(45/180*Constants.pi), d_arm*cos(135/180*Constants.pi), d_arm*cos(225/180*Constants.pi), d_arm*cos(315/180*Constants.pi); d_arm*sin(45/180*Constants.pi), d_arm*sin(135/180*Constants.pi), d_arm*sin(225/180*Constants.pi), d_arm*sin(315/180*Constants.pi); k_m/k_eta, -k_m/k_eta, k_m/k_eta, -k_m/k_eta]
-  parameter Real pinv_CA[4,4] = {{0.2500, 1.0779, 1.0779, 10.2390}, {0.2500, -1.0779, 1.0779, -10.2390}, {0.2500, -1.0779, -1.0779, 10.2390}, {0.2500, 1.0779, -1.0779, -10.2390}};
-  // [N/(rad/s)^2] thrust coefficient
-  parameter Real k_eta = 1.7*5.570e-6;
-  
-equation
-
-algorithm
-
-  when sample(0, update_interval) then
-
-    pos_error := position_setpoint-pos_w_p_w_fdbk;
-    vel_target := {Kp_x, Kp_y, Kp_z}.*pos_error;
-    
-    C_wb := transpose(eul2rot(euler_wb_fdbk));
-    vel_error := vel_target-transpose(C_wb)*vel_w_p_b_fdbk;
-    vel_error_i := vel_error_i+vel_error*update_interval;
-    vel_error_d := (vel_error-vel_error_last)/update_interval;
-    vel_error_last := vel_error;
-    acc_target := {Kp_vx, Kp_vy, Kp_vz}.*vel_error+{Ki_vx, Ki_vy, Ki_vz}.*vel_error_i+{Kd_vx, Kd_vy, Kd_vz}.*vel_error_d-{0.0, 0.0, Constants.g};
-    acc_z_target := -acc_target[3];
-    acc_fwd_target := acc_target[1]*cos(euler_wb_fdbk[3])+acc_target[2]*sin(euler_wb_fdbk[3]);
-    acc_rgt_target := -acc_target[1]*sin(euler_wb_fdbk[3])+acc_target[2]*cos(euler_wb_fdbk[3]);
-    
-    pitch_target := atan(-acc_fwd_target/Constants.g);
-    roll_target := atan(acc_rgt_target*cos(pitch_target)/Constants.g);
-    yaw_target := yaw_setpoint;
-    att_error := {roll_target, pitch_target, yaw_target}-euler_wb_fdbk;
-    omega_target := {Kp_phi, Kp_the, Kp_psi}.*att_error;
-    
-    omega_error := omega_target-omega_wb_b_fdbk;
-    omega_error_i := omega_error_i+omega_error*update_interval;
-    omega_error_d := (omega_error-omega_error_last)/update_interval;
-    omega_error_last := omega_error;
-    moment_target := J*({Kp_p, Kp_q, Kp_r}.*omega_error+{Ki_p, Ki_q, Ki_r}.*omega_error_i+{Kd_p, Kd_q, Kd_r}.*omega_error_d)+hatmap(omega_wb_b_fdbk)*(J*omega_wb_b_fdbk);
-    att_body_thrust_vec := C_wb*{0.0, 0.0, -1.0};
-    lean_angle := acos(clip({0.0, 0.0, -1.0}*att_body_thrust_vec,-1,1));
-    force_target := mass*acc_z_target/cos(lean_angle);
-    fm_target := {force_target, moment_target[1], moment_target[2], moment_target[3]};
-    thrust_target := pinv_CA*fm_target;
-    ang_spd_target := thrust_target./k_eta;
-    normalized_ctrl_input_1 := sqrt(ang_spd_target[1])/omega_rotor_max;
-    normalized_ctrl_input_2 := sqrt(ang_spd_target[2])/omega_rotor_max;
-    normalized_ctrl_input_3 := sqrt(ang_spd_target[3])/omega_rotor_max;
-    normalized_ctrl_input_4 := sqrt(ang_spd_target[4])/omega_rotor_max;
-
-
-  end when;
-
-end EulerPID;
+    algorithm
+      when sample(0, update_interval) then
+        pos_error := position_setpoint - pos_w_p_w_fdbk;
+        vel_target := {Kp_x, Kp_y, Kp_z}.*pos_error;
+        C_wb := transpose(eul2rot(euler_wb_fdbk));
+        vel_error := vel_target - transpose(C_wb)*vel_w_p_b_fdbk;
+        vel_error_i := vel_error_i + vel_error*update_interval;
+        vel_error_d := (vel_error - vel_error_last)/update_interval;
+        vel_error_last := vel_error;
+        acc_target := {Kp_vx, Kp_vy, Kp_vz}.*vel_error + {Ki_vx, Ki_vy, Ki_vz}.*vel_error_i + {Kd_vx, Kd_vy, Kd_vz}.*vel_error_d - {0.0, 0.0, Constants.g};
+        acc_z_target := -acc_target[3];
+        acc_fwd_target := acc_target[1]*cos(euler_wb_fdbk[3]) + acc_target[2]*sin(euler_wb_fdbk[3]);
+        acc_rgt_target := -acc_target[1]*sin(euler_wb_fdbk[3]) + acc_target[2]*cos(euler_wb_fdbk[3]);
+        pitch_target := atan(-acc_fwd_target/Constants.g);
+        roll_target := atan(acc_rgt_target*cos(pitch_target)/Constants.g);
+        yaw_target := yaw_setpoint;
+        att_error := {roll_target, pitch_target, yaw_target} - euler_wb_fdbk;
+        omega_target := {Kp_phi, Kp_the, Kp_psi}.*att_error;
+        omega_error := omega_target - omega_wb_b_fdbk;
+        omega_error_i := omega_error_i + omega_error*update_interval;
+        omega_error_d := (omega_error - omega_error_last)/update_interval;
+        omega_error_last := omega_error;
+        moment_target := J*({Kp_p, Kp_q, Kp_r}.*omega_error + {Ki_p, Ki_q, Ki_r}.*omega_error_i + {Kd_p, Kd_q, Kd_r}.*omega_error_d) + hatmap(omega_wb_b_fdbk)*(J*omega_wb_b_fdbk);
+        att_body_thrust_vec := C_wb*{0.0, 0.0, -1.0};
+        lean_angle := acos(clip({0.0, 0.0, -1.0}*att_body_thrust_vec, -1, 1));
+        force_target := mass*acc_z_target/cos(lean_angle);
+        fm_target := {force_target, moment_target[1], moment_target[2], moment_target[3]};
+        thrust_target := pinv_CA*fm_target;
+        ang_spd_target := thrust_target./k_eta;
+        normalized_ctrl_input_1 := sqrt(ang_spd_target[1])/omega_rotor_max;
+        normalized_ctrl_input_2 := sqrt(ang_spd_target[2])/omega_rotor_max;
+        normalized_ctrl_input_3 := sqrt(ang_spd_target[3])/omega_rotor_max;
+        normalized_ctrl_input_4 := sqrt(ang_spd_target[4])/omega_rotor_max;
+      end when;
+    end EulerPID;
   end Components;
 
   package Connectors
@@ -578,13 +517,13 @@ end EulerPID;
         Icon(graphics = {Polygon(origin = {0, -20}, points = {{-50, -20}, {-80, 40}, {80, 40}, {50, -20}, {-50, -20}}), Ellipse(origin = {17, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-19, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-51, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {49, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-31, -24}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-1, -24}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {29, -24}, extent = {{-9, 8}, {9, -8}}), Text(origin = {0, -60}, extent = {{-80, 20}, {80, -20}}, textString = "%name")}, coordinateSystem(extent = {{-80, 20}, {80, -80}})),
         Diagram(graphics = {Polygon(origin = {0, -20}, points = {{-50, -20}, {-80, 40}, {80, 40}, {50, -20}, {-50, -20}}), Ellipse(origin = {17, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-19, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-51, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {49, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-31, -24}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-1, -24}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {29, -24}, extent = {{-9, 8}, {9, -8}}), Text(origin = {0, -60}, extent = {{-80, 20}, {80, -20}}, textString = "%name")}, coordinateSystem(extent = {{-80, 20}, {80, -80}})));
     end SensorBus;
-    
+
     expandable connector RCBus
       annotation(
         Icon(graphics = {Polygon(origin = {0, -20}, points = {{-50, -20}, {-80, 40}, {80, 40}, {50, -20}, {-50, -20}}), Ellipse(origin = {17, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-19, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-51, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {49, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-31, -24}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-1, -24}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {29, -24}, extent = {{-9, 8}, {9, -8}}), Text(origin = {0, -60}, extent = {{-80, 20}, {80, -20}}, textString = "%name")}, coordinateSystem(extent = {{-80, 20}, {80, -80}})),
         Diagram(graphics = {Polygon(origin = {0, -20}, points = {{-50, -20}, {-80, 40}, {80, 40}, {50, -20}, {-50, -20}}), Ellipse(origin = {17, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-19, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-51, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {49, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-31, -24}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-1, -24}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {29, -24}, extent = {{-9, 8}, {9, -8}}), Text(origin = {0, -60}, extent = {{-80, 20}, {80, -20}}, textString = "%name")}, coordinateSystem(extent = {{-80, 20}, {80, -80}})));
     end RCBus;
-    
+
     expandable connector MAVLinkBus
       annotation(
         Icon(graphics = {Polygon(origin = {0, -20}, points = {{-50, -20}, {-80, 40}, {80, 40}, {50, -20}, {-50, -20}}), Ellipse(origin = {17, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-19, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-51, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {49, 0}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-31, -24}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {-1, -24}, extent = {{-9, 8}, {9, -8}}), Ellipse(origin = {29, -24}, extent = {{-9, 8}, {9, -8}}), Text(origin = {0, -60}, extent = {{-80, 20}, {80, -20}}, textString = "%name")}, coordinateSystem(extent = {{-80, 20}, {80, -80}})),
@@ -604,14 +543,12 @@ end EulerPID;
 
   package Utils
     function quat2rot
-      // note: this is a function for conversion between quaternion and rotational matrix (SO3, dcm)
+      // note: conversion between quaternion and rotational matrix (SO3, dcm)
       //       resulting matrix is not coordinate transformation matrix, rotation matrix (take transpose for coordinate transform)
-      // input
+      // [-] input: quaternion
       input Real q[4];
-      // [-] quaternion
-      // output
+      // [-] output: rotation matrix
       output Real R[3, 3];
-      // [-] rotation matrix
     algorithm
       R[1, 1] := q[1]*q[1] + q[2]*q[2] - q[3]*q[3] - q[4]*q[4];
       R[1, 2] := 2*(q[2]*q[3] - q[1]*q[4]);
@@ -625,82 +562,131 @@ end EulerPID;
     end quat2rot;
 
     function clip
-      // inputs
+      // note: clipping scalar for given upper/lower bounds
+      // [-] input: scalar
       input Real x;
-      // [-] input value
+      // [-] input: lower bound
       input Real x_min;
-      // [-] minimum limit
+      // [-] input: upper bound
       input Real x_max;
-      // [-] maximum limit
-      // output
+      // [-] output: clipped value
       output Real y;
-      // [-] clipped value
     algorithm
       y := if x < x_min then x_min else if x > x_max then x_max else x;
     end clip;
 
     function hatmap
-      // input
+      // note: hat map for cross product computation
+      // [-] input: three-dimensional vector
       input Real v[3];
-      // [-] 3D vector
-      // output
+      // [-] output: cross prodcut matrix
       output Real V[3, 3];
-      // [-] cross-product matrix
     algorithm
       V := [0, -v[3], v[2]; v[3], 0, -v[1]; -v[2], v[1], 0];
     end hatmap;
 
     function quat2eul
-    
       // note: euler angle represents same rotation as quaternion
+      // [-] load packages: sine and cosine
+      import Modelica.Math.atan;
+      import Modelica.Math.asin;
       // [-] input: quaternion
       input Real q[4];
-      
       // [rad] output: euler angle (3-2-1 rotation)
       output Real eul[3];
-    
     algorithm
-    
-      eul[1] := atan((2*q[3]*q[4]+2*q[1]*q[2])/(2*q[1]^2+2*q[4]^2-1));
-      eul[2] := asin(-(2*q[2]*q[4]-2*q[1]*q[3]));
-      eul[3] := atan((2*q[2]*q[3]+2*q[1]*q[4])/(2*q[1]^2+2*q[2]^2-1));
-      
+      eul[1] := atan((2*q[3]*q[4] + 2*q[1]*q[2])/(2*q[1]^2 + 2*q[4]^2 - 1));
+      eul[2] := asin(-(2*q[2]*q[4] - 2*q[1]*q[3]));
+      eul[3] := atan((2*q[2]*q[3] + 2*q[1]*q[4])/(2*q[1]^2 + 2*q[2]^2 - 1));
     end quat2eul;
 
     function eul2rot
-    
-      // note: Euler angle conversion to rotation matrix (roll/pitch/yaw, not coordinate transformation)
+      // note: euler angle conversion to rotation matrix (roll/pitch/yaw, transpose of coordinate transformation)
       // [-] load packages: sine and cosine
       import Modelica.Math.sin;
       import Modelica.Math.cos;
-      
       // [rad] input: euler angle (3-2-1 rotation)
       input Real euler[3];
-      
       // [-] output: rotation matrix (a point rotation)
-      output Real R[3,3];
+      output Real R[3, 3];
+    algorithm
+      R[1, 1] := cos(euler[2])*cos(euler[3]);
+      R[1, 2] := -cos(euler[1])*sin(euler[3]) + sin(euler[1])*sin(euler[2])*cos(euler[3]);
+      R[1, 3] := sin(euler[1])*sin(euler[3]) + cos(euler[1])*sin(euler[2])*cos(euler[3]);
+      R[2, 1] := cos(euler[2])*sin(euler[3]);
+      R[2, 2] := cos(euler[1])*cos(euler[3]) + sin(euler[1])*sin(euler[2])*sin(euler[3]);
+      R[2, 3] := -sin(euler[1])*cos(euler[3]) + cos(euler[1])*sin(euler[2])*sin(euler[3]);
+      R[3, 1] := -sin(euler[2]);
+      R[3, 2] := sin(euler[1])*cos(euler[2]);
+      R[3, 3] := cos(euler[1])*cos(euler[2]);
+    end eul2rot;
+
+    function quatprod
+      // note: quaternion product
+      // [-] input: quaternion
+      input Real q_in1[4], q_in2[4];
+      // [-] output: quaternion
+      output Real q_out[4];
+    algorithm
+      q_out[1] := q_in1[1]*q_in2[1] - q_in1[2]*q_in2[2] - q_in1[3]*q_in2[3] - q_in1[4]*q_in2[4];
+      q_out[2] := q_in1[1]*q_in2[2] + q_in1[2]*q_in2[1] + q_in1[3]*q_in2[4] - q_in1[4]*q_in2[3];
+      q_out[3] := q_in1[1]*q_in2[3] - q_in1[2]*q_in2[4] + q_in1[3]*q_in2[1] + q_in1[4]*q_in2[2];
+      q_out[4] := q_in1[1]*q_in2[4] + q_in1[2]*q_in2[3] - q_in1[3]*q_in2[2] + q_in1[4]*q_in2[1];
+    end quatprod;
+
+    function cross3
+    
+      input Real v_in1[3], v_in2[3];  // [-] input vector
+      output Real v_out[3];               // [-] output vector
+    algorithm
+    
+      v_out[1] := v_in1[2]*v_in2[3]-v_in1[3]*v_in2[2];
+      v_out[2] := -(v_in1[1]*v_in2[3]-v_in1[3]*v_in2[1]);
+      v_out[3] := v_in1[1]*v_in2[2]-v_in1[2]*v_in2[1];
+    
+    end cross3;
+
+    function inv3x3
+      // note: inverse of 3x3 matrix using adjugate/determinant
+      // [-] input: 3x3 matrix
+      input Real M[3,3];
+      // [-] output: 3x3 matrix
+      output Real invM[3,3];
+    protected
+      // [-] internal state: determinant and eps for inversion
+      Real det;
+      constant Real eps = 1e-12;
       
     algorithm
     
-      R[1,1] := cos(euler[2])*cos(euler[3]);
-      R[1,2] := -cos(euler[1])*sin(euler[3])+sin(euler[1])*sin(euler[2])*cos(euler[3]);
-      R[1,3] := sin(euler[1])*sin(euler[3])+cos(euler[1])*sin(euler[2])*cos(euler[3]);
-      R[2,1] := cos(euler[2])*sin(euler[3]);
-      R[2,2] := cos(euler[1])*cos(euler[3])+sin(euler[1])*sin(euler[2])*sin(euler[3]);
-      R[2,3] := -sin(euler[1])*cos(euler[3])+cos(euler[1])*sin(euler[2])*sin(euler[3]);
-      R[3,1] := -sin(euler[2]);
-      R[3,2] := sin(euler[1])*cos(euler[2]);
-      R[3,3] := cos(euler[1])*cos(euler[2]);
+      // determinant
+      det :=  M[1,1]*(M[2,2]*M[3,3]-M[2,3]*M[3,2])
+            - M[1,2]*(M[2,1]*M[3,3]-M[2,3]*M[3,1])
+            + M[1,3]*(M[2,1]*M[3,2]-M[2,2]*M[3,1]);
     
-    end eul2rot;
+      assert(abs(det) > 1e-12,
+             "inv3x3: matrix is singular or ill-conditioned (|det| ≈ 0).");
+    
+      // adjugate (transpose of cofactor) divided by det
+      invM[1,1] := (M[2,2]*M[3,3]-M[2,3]*M[3,2])/det;
+      invM[1,2] := -(M[1,2]*M[3,3]-M[1,3]*M[3,2])/det;
+      invM[1,3] := (M[1,2]*M[2,3]-M[1,3]*M[2,2])/det;
+      invM[2,1] := -(M[2,1]*M[3,3]-M[2,3]*M[3,1])/det;
+      invM[2,2] := (M[1,1]*M[3,3]-M[1,3]*M[3,1])/det;
+      invM[2,3] := -(M[1,1]*M[2,3]-M[1,3]*M[2,1])/det;
+      invM[3,1] := (M[2,1]*M[3,2]-M[2,2]*M[3,1])/det;
+      invM[3,2] := -(M[1,1]*M[3,2]-M[1,2]*M[3,1])/det;
+      invM[3,3] := (M[1,1]*M[2,2]-M[1,2]*M[2,1])/det;
+      
+    end inv3x3;
+    annotation(
+      Icon);
   end Utils;
 
   model ExampleHovering
-  
     // parameters
     parameter Integer fidelity = 1 "Select fidelity level" annotation(
       choices(choice = 1 "Low-Fidelity", choice = 2 "High-Fidelity"));
-    
     // load components
     Components.Quadrotor quadrotor(fidelity = fidelity) annotation(
       Placement(transformation(origin = {90, 40}, extent = {{-36, -36}, {36, 36}})));
@@ -710,20 +696,17 @@ end EulerPID;
       Placement(transformation(origin = {-162, 60}, extent = {{-35, -35}, {35, 35}})));
     Components.MissionPlanner missionplanner annotation(
       Placement(transformation(origin = {-162, 6}, extent = {{-35, -35}, {35, 35}})));
-  
   equation
-  
-  connect(controller.sensor, quadrotor.sensor) annotation(
+    connect(controller.sensor, quadrotor.sensor) annotation(
       Line(points = {{-80, 16}, {-80, -12}, {136, -12}, {136, 40}}, thickness = 0.5));
-  connect(quadrotor.control, controller.control) annotation(
+    connect(quadrotor.control, controller.control) annotation(
       Line(points = {{44, 40}, {16, 40}}, thickness = 0.5));
-  connect(controller.rc, joystick.rc) annotation(
+    connect(controller.rc, joystick.rc) annotation(
       Line(points = {{-80, 54}, {-116, 54}}, thickness = 0.5));
-  connect(missionplanner.mavlink, controller.mavlink) annotation(
+    connect(missionplanner.mavlink, controller.mavlink) annotation(
       Line(points = {{-116, 0}, {-94, 0}, {-94, 33.5}, {-80, 33.5}, {-80, 34}}, thickness = 0.5));
-  
-  annotation(
+    annotation(
       Diagram(coordinateSystem(extent = {{-200, 100}, {160, -40}})),
-      experiment(StartTime = 0, StopTime = 20.0, Tolerance = 1e-06, Interval = 0.005));
+      experiment(StartTime = 0, StopTime = 100.0, Tolerance = 1e-06, Interval = 0.005));
   end ExampleHovering;
 end GSQuad;
