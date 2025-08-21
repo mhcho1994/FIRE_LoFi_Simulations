@@ -5,9 +5,10 @@ import logging
 import time 
 import shutil
 import os
+import logging
 
 # save log
-# log = logging.getLogger( __name__ )
+log = logging.getLogger( __name__ )
 
 # fmu generation function
 def generate_fmu(name, filename, fmutype, parameter = {}): 
@@ -51,7 +52,7 @@ def generate_fmu(name, filename, fmutype, parameter = {}):
     #     f.write(model_code)
 
     fmu_gen = model.convertMo2Fmu(fileNamePrefix = name, fmuType = fmutype)
-    # log.info(f"FMU created at {fmu_gen}")
+    log.info(f"FMU created at {fmu_gen}")
     destination = os.path.join(os.getcwd(), f"{name}")
 
     if not os.path.exists(destination):

@@ -1,6 +1,6 @@
 # load packages
 import numpy as np
-import roversim
+import dronesim
 import os
 import glob
 import sys
@@ -18,15 +18,19 @@ def suppress_stdout():
         finally:
             sys.stdout = old_stdout
 
-def simulation_with_controller_webserver(N, tf = 20, dt = 0.1, fidelity = 1, attack_scenario = 0, parameter_file = "rover_specs2.json"):
-    sim = roversim.MFRoverClosedSIM(fidelity = fidelity, attack_scenario = attack_scenario, parameter_file = parameter_file)
-    destination = os.path.join(os.getcwd(), f"results")
+def drone_simulation(N = 1, tf = 20, dt = 0.1, type = 1, physics_fidelity = 1, cyber_fidelity = 1, attack_scenario = 0, parameter_file = "drone_specs.json", logging = True):
+    if logging:
+        log_dir = os.path.join(os.getcwd(),f"logs")
+        os.makedirs(log_dir, exist_ok=True)
+        log_path = os.path.join(log_dir, f"simulation.log")
 
-    if not os.path.exists(destination):
-        os.makedirs(destination)
+    if type == 1:
+        sim = dronesim.MFQuadrotorCoSIM(physics_fidelity = physics_fidelity, cyber_fidelity = cyber_fidelity, attack_scenario = attack_scenario, parameter_file = parameter_file, logging_file = None)
+    sim_dir = os.path.join(os.getcwd(), f"results")
+    os.makedirs(sim_dir, exist_ok=True)
 
     for idx in range(N):
-        file_path = os.path.join(destination, f"closed_loop_{idx+1}.csv")
+        file_path = os.path.join(sim_dir, f"cosimulation_{idx+1}.csv")
         if os.path.isfile(file_path):
             os.remove(file_path)
         df = sim.simulate(tf = tf, dt = dt)
@@ -160,6 +164,6 @@ if __name__ == "__main__":
     # note: emi-vulnerability is only supported in high fidelity model
 
     # with suppress_stdout():
-    simulation_with_controller_webserver(N = 1, tf = 35, attack_scenario = 4, fidelity = 2)
+    drone_simulation(N = 1, tf = 30, dt = 0.005)
 
-    read_plot_logs(monte_carlo_plot = 0, attack_scenario = 4)
+    # read_plot_logs(monte_carlo_plot = 0, attack_scenario = 4)

@@ -11,9 +11,9 @@ package GSQuad
       QuadLowFidelity quad_low if fidelity == 1;
       // parameters
       // [sec] PWM signal frequency
-      parameter Real pwm_interval = 0.005 if fidelity == 1;
+      parameter Real actuator_sample_period = 0.005 if fidelity == 1;
       // [sec] sensing frequency
-      parameter Real sample_interval = 0.005 if fidelity == 1;
+      parameter Real sensor_sample_period = 0.005 if fidelity == 1;
       // [-] minimum/maximum PWM
       parameter Real pwm_min = 1000;
       parameter Real pwm_max = 2000;
@@ -31,24 +31,41 @@ package GSQuad
       // [-] quaternion: attitude of drone body with repsect to world frame
       // [rad/s] rate: angular rate of drone body with respect to world frame represented in body frame
       // [m/s^2] acceleration: acceleration of drone c.g. in world frame represented in body frame
+      // [m/s^2, rad] acceleration of p(cg) in world frame(w) expressed in body frame(b), euler angle from world(w) to body(b)
       // [rad] euler angle: attitude of drone body with respect to world frame (intrinsic rotation, 3-2-1)
       Connectors.SensorBus sensor annotation(
         Placement(transformation(origin = {120, 7}, extent = {{-19.8, -12.375}, {19.8, 12.375}}), iconTransformation(origin = {129.6, 1.75}, extent = {{-27.6, -17.25}, {27.6, 17.25}})));
-      Connectors.RealOutput pos_w_p_w_meas[3](start = {0, 0, 0}, each fixed = true), vel_w_p_b_meas[3](start = {0, 0, 0}, each fixed = true);
-      Connectors.RealOutput quat_wb_meas[4](start = {1, 0, 0, 0}, each fixed = true), rate_wb_b_meas[3](start = {0, 0, 0}, each fixed = true);
+      Connectors.RealOutput pos_w_p_w_meas[3], vel_w_p_b_meas[3];
+      Connectors.RealOutput quat_wb_meas[4], rate_wb_b_meas[3];
       Connectors.RealOutput acc_w_p_b_meas[3], euler_wb_meas[3];
-      // internal states
-      // [m/s^2, rad] acceleration of p(cg) in world frame(w) expressed in body frame(b), euler angle from world(w) to body(b)
-      Real acc_w_p_b[3], euler_wb[3];
+      // discrete buffers (internal)
+      discrete Real pos_w_p_w_buf[3](start={0.0,0.0,0.0}, each fixed=true);
+      discrete Real vel_w_p_b_buf[3](start={0.0,0.0,0.0}, each fixed=true);
+      discrete Real acc_w_p_b_buf[3](start={0.0,0.0,0.0}, each fixed=true);
+      discrete Real quat_wb_buf[4](start={1.0,0.0,0.0,0.0}, each fixed=true);
+      discrete Real euler_wb_buf[3](start={0.0,0.0,0.0}, each fixed=true);
+      discrete Real rate_wb_b_buf[3](start={0.0,0.0,0.0}, each fixed=true);
+      
     algorithm
 // pwm sampling of ESC/servo
-      when sample(0, pwm_interval) then
+      when sample(0, actuator_sample_period) then
         if fidelity == 1 then
           for idx in 1:4 loop
             quad_low.omega_rotor_cmd[idx] := (quad_low.omega_rotor_max - quad_low.omega_rotor_min)*(clip(pwm_rotor_cmd[idx], pwm_min, pwm_max) - pwm_min)/(pwm_max - pwm_min) + quad_low.omega_rotor_min;
           end for;
         end if;
       end when;
+      when sample(0, sensor_sample_period) then
+        if fidelity == 1 then
+          pos_w_p_w_buf := quad_low.position_w_p_w;
+          vel_w_p_b_buf := quad_low.velocity_w_p_b;
+          acc_w_p_b_buf := {0.0,0.0,0.0};
+          quat_wb_buf := quad_low.quaternion_wb;
+          euler_wb_buf := quat2eul(quad_low.quaternion_wb);
+          rate_wb_b_buf := quad_low.rate_wb_b;
+        end if;
+      end when;
+          
       equation
       connect(control.pwm_1, pwm_rotor_cmd[1]);
       connect(control.pwm_2, pwm_rotor_cmd[2]);
@@ -73,23 +90,15 @@ package GSQuad
       connect(sensor.p_wb_b, rate_wb_b_meas[1]);
       connect(sensor.q_wb_b, rate_wb_b_meas[2]);
       connect(sensor.r_wb_b, rate_wb_b_meas[3]);
-// equation for sensor sampling
-      if fidelity == 1 then
-        euler_wb = quat2eul(quad_low.quaternion_wb);
-        acc_w_p_b = {0.0, 0.0, 0.0};
-      end if;
-      when sample(0, sample_interval) then
-        if fidelity == 1 then
-          pos_w_p_w_meas = quad_low.position_w_p_w;
-          vel_w_p_b_meas = quad_low.velocity_w_p_b;
-          quat_wb_meas = quad_low.quaternion_wb;
-          rate_wb_b_meas = quad_low.rate_wb_b;
-          acc_w_p_b_meas = acc_w_p_b;
-          euler_wb_meas[1] = euler_wb[1];
-          euler_wb_meas[2] = euler_wb[2];
-          euler_wb_meas[3] = mod(euler_wb[3] + Constants.pi, 2*Constants.pi) - Constants.pi;
-        end if;
-      end when;
+  // equation for sensor sampling
+      pos_w_p_w_meas = pre(pos_w_p_w_buf);
+      vel_w_p_b_meas = pre(vel_w_p_b_buf);
+      acc_w_p_b_meas = pre(acc_w_p_b_buf);
+      quat_wb_meas = pre(quat_wb_buf);
+      euler_wb_meas[1] = pre(euler_wb_buf[1]);
+      euler_wb_meas[2] = pre(euler_wb_buf[2]);
+      euler_wb_meas[3] = mod(pre(euler_wb_buf[3])+Constants.pi,2*Constants.pi)-Constants.pi;
+      rate_wb_b_meas = pre(rate_wb_b_buf);
     annotation(
         Icon(graphics = {Ellipse(origin = {-70, 70}, extent = {{-30, 30}, {30, -30}}), Ellipse(origin = {70, 70}, extent = {{-30, 30}, {30, -30}}), Ellipse(origin = {-70, -70}, extent = {{-30, 30}, {30, -30}}), Ellipse(origin = {70, -70}, extent = {{-30, 30}, {30, -30}}), Polygon(points = {{-20, 40}, {-40, 20}, {-40, -20}, {-20, -40}, {20, -40}, {40, -20}, {40, 20}, {20, 40}, {0, 40}, {-20, 40}}), Ellipse(origin = {-70, 70}, fillPattern = FillPattern.Solid, extent = {{-2, 2}, {2, -2}}), Polygon(origin = {-48, 48}, points = {{-22, 22}, {14, -22}, {20, -16}, {22, -14}, {-22, 22}, {-22, 22}}), Polygon(origin = {48, 48}, points = {{22, 22}, {-14, -22}, {-22, -14}, {22, 22}, {22, 22}}), Ellipse(origin = {70, -70}, fillPattern = FillPattern.Solid, extent = {{-2, 2}, {2, -2}}), Ellipse(origin = {70, 70}, fillPattern = FillPattern.Solid, extent = {{-2, 2}, {2, -2}}), Polygon(origin = {48, -48}, points = {{22, -22}, {-14, 22}, {-22, 14}, {22, -22}, {22, -22}}), Ellipse(origin = {-70, -70}, fillPattern = FillPattern.Solid, extent = {{-2, 2}, {2, -2}}), Polygon(origin = {-48, -48}, points = {{-22, -22}, {22, 14}, {14, 22}, {-22, -22}, {-22, -22}}), Ellipse(origin = {70, 54}, extent = {{-2, -14}, {2, 14}}), Ellipse(origin = {70, 86}, extent = {{-2, -14}, {2, 14}}), Ellipse(origin = {-70, 86}, extent = {{-2, -14}, {2, 14}}), Ellipse(origin = {-70, 54}, extent = {{-2, -14}, {2, 14}}), Ellipse(origin = {-70, -54}, extent = {{-2, -14}, {2, 14}}), Ellipse(origin = {-70, -86}, extent = {{-2, -14}, {2, 14}}), Ellipse(origin = {70, -54}, extent = {{-2, -14}, {2, 14}}), Ellipse(origin = {70, -86}, extent = {{-2, -14}, {2, 14}}), Text(extent = {{-40, 18}, {40, -18}}, textString = "Quadrotor")}));
     end Quadrotor;
@@ -100,7 +109,7 @@ package GSQuad
       import GSQuad.Constants;
       // parameters
       // [sec] operational frequency
-      parameter Real update_interval = 0.005;
+      parameter Real update_period = 0.005;
       // [-] minimum/maximum PWM
       parameter Real pwm_min = 1000;
       parameter Real pwm_max = 2000;
@@ -110,7 +119,7 @@ package GSQuad
       // input: sensor feedback from drone (refer to definitions in quadrotor model)
       Connectors.SensorBus sensor annotation(
         Placement(transformation(origin = {120.2, 6.375}, extent = {{-20.2, -12.625}, {20.2, 12.625}}), iconTransformation(origin = {-131, -61.125}, extent = {{-29, -18.125}, {29, 18.25}})));
-      Connectors.RealInput pos_w_p_w_fdbk[3], vel_w_p_b_fdbk[3], acc_w_p_b_fdbk[3], quat_wb_fdbk[4], euler_wb_fdbk[3], omega_wb_b_fdbk[3];
+      Connectors.RealInput pos_w_p_w_fdbk[3], vel_w_p_b_fdbk[3], acc_w_p_b_fdbk[3], quat_wb_fdbk[4], euler_wb_fdbk[3], rate_wb_b_fdbk[3];
       // input: rc joystick input (normalized, roll/pitch/yaw/throttle)
       Connectors.RCBus rc annotation(
         Placement(transformation(origin = {-120, 39}, extent = {{-19.8, -12.375}, {19.8, 12.375}}), iconTransformation(origin = {-128.4, 41.75}, extent = {{-27.6, -17.25}, {27.6, 17.25}})));
@@ -123,6 +132,9 @@ package GSQuad
       Connectors.ControlBus control annotation(
         Placement(transformation(origin = {-120.2, -61.625}, extent = {{-20.2, -12.625}, {20.2, 12.625}}), iconTransformation(origin = {131, 2.875}, extent = {{-29, -18.125}, {29, 18.125}})));
       Connectors.RealOutput pwm_rotor_cmd[4];
+      // discrete buffers (internal)
+      discrete Real pwm_rotor_cmd_buf[4](start={0.0,0.0,0.0,0.0}, each fixed=true);
+      
     equation
       connect(sensor.x_w_p_w, pos_w_p_w_fdbk[1]);
       connect(sensor.y_w_p_w, pos_w_p_w_fdbk[2]);
@@ -140,9 +152,9 @@ package GSQuad
       connect(sensor.phi_wb, euler_wb_fdbk[1]);
       connect(sensor.theta_wb, euler_wb_fdbk[2]);
       connect(sensor.psi_wb, euler_wb_fdbk[3]);
-      connect(sensor.p_wb_b, omega_wb_b_fdbk[1]);
-      connect(sensor.q_wb_b, omega_wb_b_fdbk[2]);
-      connect(sensor.r_wb_b, omega_wb_b_fdbk[3]);
+      connect(sensor.p_wb_b, rate_wb_b_fdbk[1]);
+      connect(sensor.q_wb_b, rate_wb_b_fdbk[2]);
+      connect(sensor.r_wb_b, rate_wb_b_fdbk[3]);
       connect(rc.roll, rc_input[1]);
       connect(rc.pitch, rc_input[2]);
       connect(rc.yaw, rc_input[3]);
@@ -155,22 +167,22 @@ package GSQuad
       connect(control.pwm_2, pwm_rotor_cmd[2]);
       connect(control.pwm_3, pwm_rotor_cmd[3]);
       connect(control.pwm_4, pwm_rotor_cmd[4]);
-      when sample(0, update_interval) then
-        pwm_rotor_cmd[1] = pwm_min + (pwm_max - pwm_min)*euler_pid.normalized_ctrl_input_1;
-        pwm_rotor_cmd[2] = pwm_min + (pwm_max - pwm_min)*euler_pid.normalized_ctrl_input_2;
-        pwm_rotor_cmd[3] = pwm_min + (pwm_max - pwm_min)*euler_pid.normalized_ctrl_input_3;
-        pwm_rotor_cmd[4] = pwm_min + (pwm_max - pwm_min)*euler_pid.normalized_ctrl_input_4;
-      end when;
+      pwm_rotor_cmd = pre(pwm_rotor_cmd_buf);
+    
     algorithm
 // algorithm models pwm sampling of ESC/servo
-      when sample(0, update_interval) then
+      when sample(0, update_period) then
         euler_pid.position_setpoint := position_setpoint;
         euler_pid.yaw_setpoint := yaw_setpoint;
         euler_pid.pos_w_p_w_fdbk := pos_w_p_w_fdbk;
         euler_pid.vel_w_p_b_fdbk := vel_w_p_b_fdbk;
         euler_pid.euler_wb_fdbk := euler_wb_fdbk;
-        euler_pid.omega_wb_b_fdbk := omega_wb_b_fdbk;
+        euler_pid.rate_wb_b_fdbk := rate_wb_b_fdbk;
       end when;
+      when sample(0, update_period) then
+        pwm_rotor_cmd_buf := fill(pwm_min,4)+(pwm_max-pwm_min).*pre(euler_pid.normalized_ctrl_input); // here, no pre problem
+      end when;
+      
       annotation(
         Diagram,
         Icon(graphics = {Rectangle(origin = {0, -14}, fillPattern = FillPattern.Solid, extent = {{-20, 30}, {20, -30}}), Rectangle(origin = {25, 11}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {25, -5}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {25, 3}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {25, -13}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {25, -21}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {-25, 11}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {-25, 3}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {-25, -5}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {-25, -13}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {-25, -21}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(lineThickness = 0.75, extent = {{-60, 80}, {60, -80}}), Rectangle(origin = {28, -59}, lineThickness = 1.25, extent = {{-20, 5}, {20, -5}}), Rectangle(origin = {-44, 61}, lineThickness = 0.5, extent = {{-10, 5}, {10, -5}}), Rectangle(origin = {28, -59}, fillPattern = FillPattern.Solid, extent = {{-10, 1}, {10, -1}}), Rectangle(origin = {-28, -59}, lineThickness = 1.25, extent = {{-20, 5}, {20, -5}}), Rectangle(origin = {-28, -59}, fillPattern = FillPattern.Solid, extent = {{-10, 1}, {10, -1}}), Rectangle(origin = {-44, 58}, lineThickness = 0.5, extent = {{-6, 2}, {6, -2}}), Rectangle(origin = {-52, 57}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {-36, 57}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {-51, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-47, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-41, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-37, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-44, 45}, lineThickness = 0.5, extent = {{-10, 5}, {10, -5}}), Rectangle(origin = {-44, 42}, lineThickness = 0.5, extent = {{-6, 2}, {6, -2}}), Rectangle(origin = {-52, 41}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {-36, 41}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {-51, 47}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-47, 47}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-41, 47}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-37, 47}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {16, 61}, lineThickness = 0.5, extent = {{-10, 5}, {10, -5}}), Rectangle(origin = {16, 58}, lineThickness = 0.5, extent = {{-6, 2}, {6, -2}}), Rectangle(origin = {8, 57}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {24, 57}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {9, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {13, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {19, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {23, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-16, 61}, lineThickness = 0.5, extent = {{-10, 5}, {10, -5}}), Rectangle(origin = {-16, 58}, lineThickness = 0.5, extent = {{-6, 2}, {6, -2}}), Rectangle(origin = {-24, 57}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {-8, 57}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {-23, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-19, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-13, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-9, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {44, 45}, lineThickness = 0.5, extent = {{-10, 5}, {10, -5}}), Rectangle(origin = {44, 42}, lineThickness = 0.5, extent = {{-6, 2}, {6, -2}}), Rectangle(origin = {36, 41}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {52, 41}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {37, 47}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {41, 47}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {47, 47}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {51, 47}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {44, 61}, lineThickness = 0.5, extent = {{-10, 5}, {10, -5}}), Rectangle(origin = {44, 58}, lineThickness = 0.5, extent = {{-6, 2}, {6, -2}}), Rectangle(origin = {36, 57}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {52, 57}, fillPattern = FillPattern.Solid, extent = {{-2, 1}, {2, -1}}), Rectangle(origin = {37, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {41, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {47, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {51, 63}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-13, 44}, lineThickness = 0.5, extent = {{-7, 4}, {7, -4}}), Rectangle(origin = {-17, 45}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-9, 45}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-13, 45}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {13, 44}, lineThickness = 0.5, extent = {{-7, 4}, {7, -4}}), Rectangle(origin = {9, 45}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {17, 45}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {13, 45}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Ellipse(origin = {-55, 75}, lineThickness = 0.5, extent = {{-3, 3}, {3, -3}}), Line(origin = {-55, 75}, points = {{-1, 1}, {1, -1}, {1, -1}}), Rectangle(origin = {-25, 29}, lineThickness = 0.5, extent = {{-15, 5}, {15, -5}}), Rectangle(origin = {-25, 26}, lineThickness = 0.5, extent = {{-11, 2}, {11, -2}}), Rectangle(origin = {-37, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-33, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-29, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-25, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-21, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-17, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {-13, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {25, 29}, lineThickness = 0.5, extent = {{-15, 5}, {15, -5}}), Rectangle(origin = {25, 26}, lineThickness = 0.5, extent = {{-11, 2}, {11, -2}}), Rectangle(origin = {13, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {17, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {21, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {25, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {29, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {33, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Rectangle(origin = {37, 31}, lineThickness = 0.5, extent = {{-1, 1}, {1, -1}}), Line(origin = {-55, 75}, points = {{1, 1}, {-1, -1}, {-1, -1}}), Ellipse(origin = {-55, 75}, lineThickness = 0.5, extent = {{-3, 3}, {3, -3}}), Line(origin = {-55, 75}, points = {{-1, 1}, {1, -1}, {1, -1}}), Line(origin = {-55, 75}, points = {{1, 1}, {-1, -1}, {-1, -1}}), Ellipse(origin = {55, 75}, lineThickness = 0.5, extent = {{-3, 3}, {3, -3}}), Line(origin = {55, 75}, points = {{-1, 1}, {1, -1}, {1, -1}}), Line(origin = {55, 75}, points = {{1, 1}, {-1, -1}, {-1, -1}}), Ellipse(origin = {55, 75}, lineThickness = 0.5, extent = {{-3, 3}, {3, -3}}), Line(origin = {55, 75}, points = {{-1, 1}, {1, -1}, {1, -1}}), Line(origin = {55, 75}, points = {{1, 1}, {-1, -1}, {-1, -1}}), Ellipse(origin = {-55, -75}, lineThickness = 0.5, extent = {{-3, 3}, {3, -3}}), Line(origin = {-55, -75}, points = {{-1, 1}, {1, -1}, {1, -1}}), Line(origin = {-55, -75}, points = {{1, 1}, {-1, -1}, {-1, -1}}), Ellipse(origin = {-55, -75}, lineThickness = 0.5, extent = {{-3, 3}, {3, -3}}), Line(origin = {-55, -75}, points = {{-1, 1}, {1, -1}, {1, -1}}), Line(origin = {-55, -75}, points = {{1, 1}, {-1, -1}, {-1, -1}}), Ellipse(origin = {55, -75}, lineThickness = 0.5, extent = {{-3, 3}, {3, -3}}), Line(origin = {55, -75}, points = {{-1, 1}, {1, -1}, {1, -1}}), Line(origin = {55, -75}, points = {{1, 1}, {-1, -1}, {-1, -1}}), Ellipse(origin = {55, -75}, lineThickness = 0.5, extent = {{-3, 3}, {3, -3}}), Line(origin = {55, -75}, points = {{-1, 1}, {1, -1}, {1, -1}}), Line(origin = {55, -75}, points = {{1, 1}, {-1, -1}, {-1, -1}}), Rectangle(origin = {-25, -29}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {-25, -37}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {25, -29}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Rectangle(origin = {25, -37}, fillPattern = FillPattern.Solid, extent = {{-5, 1}, {5, -1}}), Text(origin = {0, -90}, extent = {{-60, 10}, {60, -10}}, textString = "Controller")}));
@@ -263,20 +275,23 @@ package GSQuad
     model Joystick
       // parameters
       // [sec] output command update rate
-      parameter Real sample_interval = 0.01;
+      parameter Real sample_period = 0.01;
       // output: normalized rc signal (roll/pitch/yaw [-1, +1], throttle [0, 1])
       Connectors.RealOutput stick_cmd[4];
       Connectors.RCBus rc annotation(
         Placement(transformation(origin = {120.2, 6.375}, extent = {{-20.2, -12.625}, {20.2, 12.625}}), iconTransformation(origin = {129, -17.125}, extent = {{-29, -18.125}, {29, 18.25}})));
+      // discrete buffers (internal)
+      discrete Real stick_cmd_buf[4](start={0.0,0.0,0.0,0.0}, each fixed=true);
     equation
       connect(rc.roll, stick_cmd[1]);
       connect(rc.pitch, stick_cmd[2]);
       connect(rc.yaw, stick_cmd[3]);
       connect(rc.throttle, stick_cmd[4]);
+      stick_cmd = pre(stick_cmd_buf);
     algorithm
-      when sample(0, sample_interval) then
-// default mode: zero commands from joystick
-        stick_cmd := {0.0, 0.0, 0.0, 0.0};
+      when sample(0, sample_period) then
+        // default mode: zero commands from joystick
+        stick_cmd_buf := {0.0,0.0,0.0,0.0};
       end when;
       annotation(
         Icon(graphics = {Rectangle(extent = {{-80, 60}, {80, -60}}), Ellipse(origin = {-39, 25}, extent = {{-25, 25}, {25, -25}}), Ellipse(origin = {39, 25}, extent = {{-25, 25}, {25, -25}}), Rectangle(origin = {0, -30}, extent = {{-60, 20}, {60, -20}}), Text(origin = {0, -30}, extent = {{-40, 10}, {40, -10}}, textString = "Joystick"), Rectangle(origin = {0, 76}, extent = {{-4, 16}, {4, -16}}), Ellipse(origin = {-39, 25}, extent = {{-3, 3}, {3, -3}}), Rectangle(origin = {-39, 25}, extent = {{-19, 11}, {19, -11}}), Rectangle(origin = {39, 25}, extent = {{-19, 11}, {19, -11}}), Ellipse(origin = {39, 19}, extent = {{-3, 3}, {3, -3}})}));
@@ -285,7 +300,7 @@ package GSQuad
     model MissionPlanner
       // parameters
       // [sec] output command update rate
-      parameter Real sample_interval = 0.1;
+      parameter Real sample_period = 0.05;
       // output: mavlink signal (simplified: currently support only waypoints)
       // [m] waypoint cooridnate defined in world frame (w), NED coordinates
       Connectors.RealOutput position_setpoint_w[3];
@@ -293,16 +308,21 @@ package GSQuad
       Connectors.RealOutput yaw_setpoint_w;
       Connectors.MAVLinkBus mavlink annotation(
         Placement(transformation(origin = {120.2, 6.375}, extent = {{-20.2, -12.625}, {20.2, 12.625}}), iconTransformation(origin = {129, -17.125}, extent = {{-29, -18.125}, {29, 18.25}})));
+      // discrete buffers (internal)
+      discrete Real position_setpoint_w_buf[3](start={0.0,0.0,0.0}, each fixed=true);
+      discrete Real yaw_setpoint_w_buf(start=0.0, fixed=true);
     equation
       connect(mavlink.x_w, position_setpoint_w[1]);
       connect(mavlink.y_w, position_setpoint_w[2]);
       connect(mavlink.z_w, position_setpoint_w[3]);
       connect(mavlink.yaw_w, yaw_setpoint_w);
+      position_setpoint_w = pre(position_setpoint_w_buf);
+      yaw_setpoint_w = pre(yaw_setpoint_w_buf);
     algorithm
-      when sample(0, sample_interval) then
-// default waypoint in NED coordinate
-        position_setpoint_w := {0.0, 0.0, 0.0};
-        yaw_setpoint_w := 0.0;
+      when sample(0, sample_period) then
+        // default waypoint in NED coordinate
+        position_setpoint_w_buf := {0.0, 0.0, 0.0};
+        yaw_setpoint_w_buf := 0.0;
       end when;
       annotation(
         Icon(graphics = {Rectangle(origin = {0, 35}, extent = {{-60, 35}, {60, -35}}), Polygon(origin = {0, -26}, points = {{-60, 26}, {-80, -26}, {80, -26}, {60, 26}, {-60, 26}}), Rectangle(origin = {0, 35}, extent = {{-56, 31}, {56, -31}}), Text(origin = {0, 36}, extent = {{-56, 18}, {56, -18}}, textString = "Mission Planner"), Polygon(origin = {0, -25}, points = {{-58, 23}, {-76, -23}, {76, -23}, {58, 23}, {-58, 23}, {-58, 23}}), Polygon(origin = {4, -13}, points = {{-60, 9}, {-68, -11}, {60, -11}, {52, 9}, {52, 9}, {-60, 9}}), Polygon(origin = {-32, -37}, points = {{12, 9}, {10, -7}, {54, -7}, {52, 9}, {52, 9}, {12, 9}})}));
@@ -354,15 +374,11 @@ package GSQuad
       parameter Real Ki_r = 0.00;
       parameter Real Kd_r = 0.80;
       // input
-      discrete Real pos_w_p_w_fdbk[3], vel_w_p_b_fdbk[3], euler_wb_fdbk[3], omega_wb_b_fdbk[3];
+      discrete Real pos_w_p_w_fdbk[3], vel_w_p_b_fdbk[3], euler_wb_fdbk[3], rate_wb_b_fdbk[3];
       discrete Real position_setpoint[3], yaw_setpoint;
       // output
       // [-] rotational speed command from ESC
-      //discrete Real normalized_ctrl_input[4](start={0,0,0,0}, each fixed=true);
-      discrete Real normalized_ctrl_input_1(start = 0, fixed = true);
-      discrete Real normalized_ctrl_input_2(start = 0, fixed = true);
-      discrete Real normalized_ctrl_input_3(start = 0, fixed = true);
-      discrete Real normalized_ctrl_input_4(start = 0, fixed = true);
+      discrete Real normalized_ctrl_input[4](start={0,0,0,0}, each fixed=false);
       // states
       // [m] position error
       discrete Real pos_error[3];
@@ -386,15 +402,15 @@ package GSQuad
       // [rad] attitude_error
       discrete Real att_error[3];
       // [rad/s] rate target
-      discrete Real omega_target[3];
+      discrete Real rate_target[3];
       // [rad/s] rate error
-      discrete Real omega_error[3];
+      discrete Real rate_error[3];
       // [rad] angular rate error integral
-      discrete Real omega_error_i[3];
+      discrete Real rate_error_i[3];
       // [rad/s] previous iteration rate error
-      discrete Real omega_error_last[3];
+      discrete Real rate_error_last[3];
       // [rad/s^2] angular rate error derivative
-      discrete Real omega_error_d[3];
+      discrete Real rate_error_d[3];
       // [N, N*m] force/moment target in body coordinates
       discrete Real force_target, moment_target[3];
       discrete Real fm_target[4];
@@ -404,8 +420,7 @@ package GSQuad
       discrete Real lean_angle;
       // [-] required thrust of each rotor
       discrete Real thrust_target[4];
-      discrete Real ang_spd_target[4];
-      //discrete Real check1, check2;//, check3;
+      discrete Real omega_spd_sq_target[4];
       // parameters
       // [kg] mass of quadrotor
       parameter Real mass = 0.942 + 4*0.15 + 1.072 + 4*0.037;
@@ -424,8 +439,7 @@ package GSQuad
       // [kg*m^2] inertia
       parameter Real J[3, 3] = [Ixx, Ixy, Ixz; Ixy, Iyy, Iyz; Ixz, Iyz, Izz];
       // [N/(N,N*m)] control effectiveness pseudo-inverse
-      //parameter Real M[4,4] = [1, 1, 1, 1; 0.328*cos(45/180*Constants.pi), 0.328*cos(135/180*Constants.pi), 0.328*cos(225/180*Constants.pi), 0.328*cos(315/180*Constants.pi); 0.328*sin(45/180*Constants.pi), 0.328*sin(135/180*Constants.pi), 0.328*sin(225/180*Constants.pi), 0.328*sin(315/180*Constants.pi); 0.136e-6/5.570e-6, -0.136e-6/5.570e-6, 0.136e-6/5.570e-6, -0.136e-6/5.570e-6];
-      //[1, 1, 1, 1; d_arm*cos(45/180*Constants.pi), d_arm*cos(135/180*Constants.pi), d_arm*cos(225/180*Constants.pi), d_arm*cos(315/180*Constants.pi); d_arm*sin(45/180*Constants.pi), d_arm*sin(135/180*Constants.pi), d_arm*sin(225/180*Constants.pi), d_arm*sin(315/180*Constants.pi); k_m/k_eta, -k_m/k_eta, k_m/k_eta, -k_m/k_eta]
+      //parameter Real CA[4,4] = [1, 1, 1, 1; 0.328*cos(45/180*Constants.pi), 0.328*cos(135/180*Constants.pi), 0.328*cos(225/180*Constants.pi), 0.328*cos(315/180*Constants.pi); 0.328*sin(45/180*Constants.pi), 0.328*sin(135/180*Constants.pi), 0.328*sin(225/180*Constants.pi), 0.328*sin(315/180*Constants.pi); 0.136e-6/5.570e-6, -0.136e-6/5.570e-6, 0.136e-6/5.570e-6, -0.136e-6/5.570e-6];
       parameter Real pinv_CA[4, 4] = {{0.2500, 1.0779, 1.0779, 10.2390}, {0.2500, -1.0779, 1.0779, -10.2390}, {0.2500, -1.0779, -1.0779, 10.2390}, {0.2500, 1.0779, -1.0779, -10.2390}};
       // [N/(rad/s)^2] thrust coefficient
       parameter Real k_eta = 1.7*5.570e-6;
@@ -448,22 +462,19 @@ package GSQuad
         roll_target := atan(acc_rgt_target*cos(pitch_target)/Constants.g);
         yaw_target := yaw_setpoint;
         att_error := {roll_target, pitch_target, yaw_target} - euler_wb_fdbk;
-        omega_target := {Kp_phi, Kp_the, Kp_psi}.*att_error;
-        omega_error := omega_target - omega_wb_b_fdbk;
-        omega_error_i := omega_error_i + omega_error*update_interval;
-        omega_error_d := (omega_error - omega_error_last)/update_interval;
-        omega_error_last := omega_error;
-        moment_target := J*({Kp_p, Kp_q, Kp_r}.*omega_error + {Ki_p, Ki_q, Ki_r}.*omega_error_i + {Kd_p, Kd_q, Kd_r}.*omega_error_d) + hatmap(omega_wb_b_fdbk)*(J*omega_wb_b_fdbk);
+        rate_target := {Kp_phi, Kp_the, Kp_psi}.*att_error;
+        rate_error := rate_target - rate_wb_b_fdbk;
+        rate_error_i := rate_error_i + rate_error*update_interval;
+        rate_error_d := (rate_error - rate_error_last)/update_interval;
+        rate_error_last := rate_error;
+        moment_target := J*({Kp_p, Kp_q, Kp_r}.*rate_error + {Ki_p, Ki_q, Ki_r}.*rate_error_i + {Kd_p, Kd_q, Kd_r}.*rate_error_d) + hatmap(rate_wb_b_fdbk)*(J*rate_wb_b_fdbk);
         att_body_thrust_vec := C_wb*{0.0, 0.0, -1.0};
         lean_angle := acos(clip({0.0, 0.0, -1.0}*att_body_thrust_vec, -1, 1));
         force_target := mass*acc_z_target/cos(lean_angle);
         fm_target := {force_target, moment_target[1], moment_target[2], moment_target[3]};
         thrust_target := pinv_CA*fm_target;
-        ang_spd_target := thrust_target./k_eta;
-        normalized_ctrl_input_1 := sqrt(ang_spd_target[1])/omega_rotor_max;
-        normalized_ctrl_input_2 := sqrt(ang_spd_target[2])/omega_rotor_max;
-        normalized_ctrl_input_3 := sqrt(ang_spd_target[3])/omega_rotor_max;
-        normalized_ctrl_input_4 := sqrt(ang_spd_target[4])/omega_rotor_max;
+        omega_spd_sq_target := thrust_target./k_eta;
+        normalized_ctrl_input := (sqrt(omega_spd_sq_target)-fill(omega_rotor_min,4))./(omega_rotor_max-omega_rotor_min)+fill(omega_rotor_min,4);
       end when;
     end EulerPID;
   end Components;
@@ -707,6 +718,6 @@ package GSQuad
       Line(points = {{-116, 0}, {-94, 0}, {-94, 33.5}, {-80, 33.5}, {-80, 34}}, thickness = 0.5));
     annotation(
       Diagram(coordinateSystem(extent = {{-200, 100}, {160, -40}})),
-      experiment(StartTime = 0, StopTime = 100.0, Tolerance = 1e-06, Interval = 0.005));
+      experiment(StartTime = 0.0, StopTime = 30.0, Tolerance = 1e-06, Interval = 0.005));
   end ExampleHovering;
 end GSQuad;

@@ -2,6 +2,7 @@
 import numpy as np
 import pyfmi
 import logging 
+import os
 
 # log = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ class FMU:
         outputs:
             str: path to the generated FMU.
         """
+        os.environ["LD_LIBRARY_PATH"] = "/usr/lib/x86_64-linux-gnu:" + os.environ.get("LD_LIBRARY_PATH","")
         self.model = pyfmi.load_fmu(file, kind = fmutype)
         self.model.initialize(start_time = 0.0)
 
