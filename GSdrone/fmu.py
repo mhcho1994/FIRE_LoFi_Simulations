@@ -45,7 +45,7 @@ class FMU:
                      'state': {'names': [],'values': np.empty((0, self.state.size))}, 
                      'variable': {'names': [],'values': np.empty((0, self.variable.size))},
                      'output': {'names': [],'values': np.empty((0, self.output.size))}}
-        self.data['time'] = np.hstack((self.data['time'],t0))
+        # self.data['time'] = np.hstack((self.data['time'],self.t0))
         self.data['input']['names'] = self.inputNames
         self.data['state']['names'] = self.stateNames
         self.data['variable']['names'] = self.variableNames
@@ -212,7 +212,7 @@ class FMU:
                      'state': {'names': [],'values': np.empty((0, self.state.size))}, 
                      'variable': {'names': [],'values': np.empty((0, self.variable.size))},
                      'output': {'names': [],'values': np.empty((0, self.output.size))}}
-        self.data['time'] = np.hstack((self.data['time'],self.t0))
+        # self.data['time'] = np.hstack((self.data['time'],self.t0))
         self.data['input']['names'] = self.inputNames
         self.data['state']['names'] = self.stateNames
         self.data['variable']['names'] = self.variableNames
